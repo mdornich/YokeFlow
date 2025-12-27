@@ -676,11 +676,6 @@ CREATE TRIGGER update_projects_updated_at
     FOR EACH ROW
     EXECUTE FUNCTION update_updated_at();
 
-CREATE TRIGGER update_project_preferences_updated_at
-    BEFORE UPDATE ON project_preferences
-    FOR EACH ROW
-    EXECUTE FUNCTION update_updated_at();
-
 -- -----------------------------------------------------------------------------
 -- Update Project Metrics (Cost and Time) on Session Complete
 -- -----------------------------------------------------------------------------
