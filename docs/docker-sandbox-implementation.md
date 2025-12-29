@@ -13,6 +13,7 @@ YokeFlow uses Docker containers to isolate agent execution and prevent environme
 - ✅ Auto-stop on project completion (December 2025)
 - ✅ Auto-delete on project deletion (December 2025)
 - ✅ Web UI container management (/containers page)
+- ✅ Playwright browser automation within Docker (December 2025)
 
 **Container Lifecycle:**
 ```
@@ -260,6 +261,88 @@ DockerSandbox.stop()
   └─ Keep container running (for reuse)
 ```
 
+### 5. Playwright Browser Automation in Docker
+
+**✅ IMPLEMENTED:** Full Playwright support within Docker containers (December 2025)
+
+YokeFlow enables browser automation within Docker containers through the Playwright MCP server. This allows agents to:
+- Navigate web pages and interact with UI elements
+- Take screenshots for visual verification
+- Run browser-based tests
+- Automate form filling and user workflows
+- All within the secure Docker sandbox
+
+**Architecture:**
+```
+Agent → MCP Playwright Tool → Host Playwright → Browser in Docker
+         (browser_navigate,      (runs on host,    (isolated browser
+          browser_click, etc)     connects to        instance)
+                                  container browser)
+```
+
+**Key Features:**
+- **Headless Chromium:** Runs without GUI for speed and efficiency
+- **Visual Verification:** Screenshots saved to project directory
+- **Network Isolation:** Browser runs within container network
+- **Shared Volume:** Screenshots accessible from host filesystem
+- **Auto-cleanup:** Browser instances closed when container stops
+
+**Installation in Container:**
+
+The Docker container automatically installs Playwright and Chromium dependencies:
+
+```bash
+# Installed during container setup
+apt-get install -y \
+    wget gnupg \
+    libglib2.0-0 libnss3 libnspr4 libdbus-1-3 \
+    libatk1.0-0 libatk-bridge2.0-0 libcups2 \
+    libdrm2 libxcomposite1 libxdamage1 \
+    libxfixes3 libxrandr2 libgbm1 libxkbcommon0 \
+    libpango-1.0-0 libcairo2 libasound2
+
+# Install Playwright
+npx playwright install chromium
+```
+
+**Usage Example:**
+
+```python
+# Agent uses MCP tools to control browser
+await mcp__playwright__browser_navigate(url="http://localhost:3000")
+await mcp__playwright__browser_snapshot()  # Capture page state
+await mcp__playwright__browser_click(element="Submit button", ref="button[type='submit']")
+await mcp__playwright__browser_take_screenshot(filename="test-result.png")
+```
+
+**Benefits:**
+- **Security:** Browser isolated from host system
+- **Consistency:** Same browser environment across sessions
+- **Resource Control:** Container limits apply to browser
+- **Port Access:** Can test localhost apps within container
+
+**Troubleshooting Playwright in Docker:**
+
+1. **Browser won't launch:**
+   - Check container has sufficient memory (2GB minimum)
+   - Verify Chromium dependencies installed
+   - Run `npx playwright install-deps chromium` in container
+
+2. **Screenshots not saving:**
+   - Ensure volume mount is read-write
+   - Check file permissions in container
+   - Verify path is within `/workspace`
+
+3. **Network connection issues:**
+   - Use container's localhost, not host's
+   - Check port mappings in docker-compose
+   - Verify app is listening on 0.0.0.0, not 127.0.0.1
+
+**Code References:**
+- MCP Playwright server: `mcp-servers/playwright/`
+- Container setup: [sandbox_manager.py:340-345](../core/sandbox_manager.py#L340-L345)
+- Browser dependencies: Added to `_setup_container()` method
+
 ---
 
 ## Configuration
@@ -343,6 +426,21 @@ async def _setup_container(self):
         "npm install -g pnpm npm",
     ]
 ```
+
+### Browser Testing Ports
+
+When running web applications with browser testing in Docker containers, additional ports may be needed:
+
+```yaml
+docker_ports:
+  - "3000:3000"    # React/Next.js dev server
+  - "3001:3001"    # Express backend
+  - "5173:5173"    # Vite dev server
+  - "8080:8080"    # Alternative web server
+  - "9222:9222"    # Chrome DevTools Protocol (for debugging)
+```
+
+The Playwright browser runs headlessly within the container and doesn't require port mapping for basic operation. However, if debugging is needed, port 9222 provides access to Chrome DevTools.
 
 ---
 

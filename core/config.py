@@ -42,7 +42,7 @@ class TimingConfig:
     """Configuration for timing and delays."""
     auto_continue_delay: int = 3  # seconds between sessions
     web_ui_poll_interval: int = 5  # seconds for UI refresh
-    web_ui_port: int = 5001
+    web_ui_port: int = 3000
 
 
 @dataclass
@@ -78,8 +78,8 @@ class SandboxConfig:
     docker_memory_limit: str = "2g"
     docker_cpu_limit: str = "2.0"
     docker_ports: List[str] = field(default_factory=lambda: [
-        "3001:3001",  # Express/Node backend (most common)
-        "5173:5173",  # Vite frontend (most common)
+        # Empty by default - no port forwarding needed when Playwright runs inside container
+        # Add ports here only if you need manual browser debugging: e.g., "5173:5173"
     ])
 
     # E2B-specific settings

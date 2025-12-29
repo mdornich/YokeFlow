@@ -1,0 +1,33 @@
+# Simple Web Application for Playwright Docker Testing
+
+Create a minimal web application to test Playwright Docker integration.
+
+## Requirements
+
+1. **Simple Express Backend** (port 3001)
+   - GET /api/health - Returns { status: "ok", timestamp: Date.now() }
+   - GET /api/message - Returns { message: "Hello from Docker!" }
+
+2. **Simple Frontend** (port 5173)
+   - Single HTML page with:
+     - Title: "Playwright Docker Test"
+     - H1: "Testing Playwright in Docker"
+     - Button: "Test API" that fetches /api/message
+     - Div to display the API response
+   - Should log to console: "Page loaded successfully"
+
+3. **Project Structure**
+   - server/index.js - Express server
+   - frontend/index.html - Simple HTML page
+   - frontend/script.js - JavaScript for API interaction
+   - init.sh - Script to start both servers
+
+## Testing Requirements
+
+After implementation, verify with browser automation that:
+- Frontend loads without errors
+- API health check returns 200
+- Button click fetches and displays message
+- Console has no errors
+
+This is specifically designed to test Playwright running inside Docker containers.

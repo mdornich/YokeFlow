@@ -1,44 +1,21 @@
-# YokeFlow Configuration
-# ======================
+# YokeFlow Configuration - Playwright Docker Enabled
 
-# Model Configuration
-# -------------------
 models:
-  # Model for initialization session (creates project structure and task database)
   initializer: claude-opus-4-5-20251101
-
-  # Model for coding sessions (implements features)
   coding: claude-sonnet-4-5-20250929
 
-# Timing Configuration
-# --------------------
 timing:
-  # Seconds to wait between autonomous sessions
   auto_continue_delay: 3
-
-  # Seconds for web UI auto-refresh polling interval
   web_ui_poll_interval: 5
 
-  # Port for web UI dashboard
-  web_ui_port: 5001
-
-# Project Configuration
-# ---------------------
-project:
-  # Default directory for generated projects
-  default_generations_dir: generations
-
-  # Default maximum iterations (null = unlimited)
-  max_iterations: null
-
-# Sandbox Configuration
-# ----------------------
 sandbox:
-  # Sandbox type: "none", "docker", or "e2b"
-  type: none
-
-  # Docker-specific settings
-  docker_image: node:20-slim
+  type: docker
+  docker_image: yokeflow-playwright:latest  # Using Playwright-enabled image
   docker_network: bridge
-  docker_memory_limit: 2g
-  docker_cpu_limit: "2.0"
+  docker_memory_limit: 3g  # Increased for browser operations
+  docker_cpu_limit: 2.0
+  docker_ports: []  # No port forwarding needed - Playwright runs inside container!
+
+project:
+  default_generations_dir: generations
+  max_iterations: null  # unlimited

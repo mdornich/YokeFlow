@@ -33,8 +33,8 @@ timing:
   # Seconds for web UI auto-refresh polling interval
   web_ui_poll_interval: 5
 
-  # Port for web UI dashboard (5001 avoids macOS AirPlay on 5000)
-  web_ui_port: 5001
+  # Port for web UI dashboard (Next.js default)
+  web_ui_port: 3000
 
 # Security Configuration
 # ----------------------
@@ -68,10 +68,13 @@ sandbox:
   type: none
 
   # Docker-specific settings (when type: docker)
-  docker_image: node:20-slim
+  docker_image: yokeflow-playwright:latest  # Or node:20-slim for basic setup
   docker_network: bridge
-  docker_memory_limit: 2g
+  docker_memory_limit: 3g  # Increased for browser operations if using Playwright
   docker_cpu_limit: "2.0"
+  # Port forwarding (optional - not needed if Playwright runs inside container)
+  # docker_ports:
+  #   - "5173:5173"  # Only if you need manual browser access for debugging
 
   # E2B-specific settings (when type: e2b)
   # e2b_api_key: ${E2B_API_KEY}  # Or set E2B_API_KEY environment variable

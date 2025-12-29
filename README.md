@@ -29,25 +29,39 @@ Build complete applications using Claude across multiple autonomous sessions. Pr
 
 ---
 
-## ⚠️ UPDATE REQUIRED: v1.1.0 → v1.1.1
+## 🚀 Version 1.2.0 Release - Playwright Browser Automation
 
-**If you're upgrading from v1.1.0, you need to apply database schema updates.**
+**Current Status: v1.2.0 - Production Ready (December 2025)**
 
-📋 **See [UPDATE-REQUIRED.md](UPDATE-REQUIRED.md) for detailed instructions.**
+### What's New in v1.2.0
 
-**Quick update (2 commands):**
+**✅ Playwright Browser Automation in Docker**: Full browser testing capabilities within secure Docker containers
+- Agents can now navigate, interact with, and test web applications
+- Screenshots and visual verification support
+- Runs headlessly inside Docker containers without port forwarding
+- Automatic Chromium installation and dependency management
+
+**🧹 Codebase Cleanup**: Removed experimental and test files from Playwright development
+- Consolidated documentation into main guides
+- Removed duplicate Dockerfiles
+- Cleaned up test scripts and temporary files
+
+---
+
+## Upgrading from v1.1.x
+
+No database changes required. Simply pull the latest code and rebuild the Docker image:
+
 ```bash
-docker exec -i yokeflow_postgres psql -U agent -d yokeflow < schema/postgresql/add_metadata_to_prompt_proposals.sql
-docker exec -i yokeflow_postgres psql -U agent -d yokeflow < schema/postgresql/cleanup_session_quality_checks.sql
+git pull
+docker build -f docker/Dockerfile.agent-sandbox-playwright -t yokeflow-playwright:latest docker/
 ```
-
-**Fresh installation?** No action needed - the main schema already includes these updates.
 
 ---
 
 ## Upgrading from v1.0.0
 
-**Important:** Version 1.1.0 includes database schema changes that are not backward compatible. If you are upgrading from v1.0.0:
+**Important:** Version 1.1.0+ includes database schema changes that are not backward compatible. If you are upgrading from v1.0.0:
 
 1. **Export any projects you want to keep** (the generated code in `generations/` directory)
 2. **Back up your database** if you want to preserve v1.0.0 data for reference
@@ -61,9 +75,10 @@ docker exec -i yokeflow_postgres psql -U agent -d yokeflow < schema/postgresql/c
 
 **Why fresh install:** Several tables were modified or removed to improve the platform. Migration scripts have been removed as most users will start fresh with this wider release.
 
-**Current Status: v1.1.0 - Production Ready (December 2025)**
+**Current Status: v1.2.0 - Production Ready with Playwright Browser Automation (December 2025)**
 - ✅ **PostgreSQL Migration**: 100% complete, production-ready async architecture
 - ✅ **Docker Sandbox**: Full integration with 90+ sessions validated
+- ✅ **Playwright Browser Automation**: Headless browser testing within Docker containers
 - ✅ **API Foundation**: REST endpoints, WebSocket support, orchestrator, JWT authentication
 - ✅ **Web UI v2.0**: **Production ready** - Complete and polished interface
   - ✅ Project creation with validation, initialization, and coding session control
@@ -375,7 +390,7 @@ models:
 timing:
   auto_continue_delay: 3
   web_ui_poll_interval: 5
-  web_ui_port: 5001
+  web_ui_port: 3000
 
 project:
   default_generations_dir: generations

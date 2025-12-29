@@ -58,7 +58,7 @@ Control delays and intervals:
 timing:
   auto_continue_delay: 3      # Seconds between sessions
   web_ui_poll_interval: 5     # Web UI refresh interval
-  web_ui_port: 5001           # Web dashboard port
+  web_ui_port: 3000           # Web dashboard port (Next.js default)
 ```
 
 ### Security

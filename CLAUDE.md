@@ -6,7 +6,7 @@ This file provides guidance to Claude Code when working with this repository.
 
 **YokeFlow** - An autonomous AI development platform that uses Claude to build complete applications over multiple sessions.
 
-**Status**: Production Ready - v1.0.0 (December 2025)
+**Status**: Production Ready - v1.2.0 (December 2025)
 
 **Architecture**: API-first platform with FastAPI + Next.js Web UI + PostgreSQL + MCP task management
 
@@ -16,7 +16,7 @@ This file provides guidance to Claude Code when working with this repository.
 
 **Session 0 (Initialization)**: Reads `app_spec.txt` → Creates epics/tasks/tests in PostgreSQL → Runs `init.sh`
 
-**Sessions 1+ (Coding)**: Get next task → Implement → Browser verify → Update database → Git commit → Auto-continue
+**Sessions 1+ (Coding)**: Get next task → Implement → Browser verify (with Playwright) → Update database → Git commit → Auto-continue
 
 **Key Files**:
 - `core/orchestrator.py` - Session lifecycle
@@ -155,6 +155,13 @@ python tests/test_orchestrator.py        # Orchestrator
 
 ## Recent Changes
 
+**December 29, 2025 - v1.2.0 Release**:
+- ✅ **Playwright Browser Automation**: Full browser testing within Docker containers
+- ✅ **Docker Integration**: Headless Chromium runs inside containers without port forwarding
+- ✅ **Visual Verification**: Screenshots and page snapshots for testing web applications
+- ✅ **Codebase Cleanup**: Removed experimental files from Playwright development
+- ✅ **Documentation Update**: Consolidated Playwright docs into main Docker guide
+
 **December 27, 2025 - v1.1.0 Release**:
 - ✅ **Version 1.1.0**: Database schema improvements, migration scripts removed
 - ✅ **Fresh Install Required**: Schema changes require clean database installation
@@ -193,10 +200,11 @@ python tests/test_orchestrator.py        # Orchestrator
 
 ## Release Status
 
-**Current State**: Production Ready - v1.1.0
+**Current State**: Production Ready - v1.2.0
 
 **Release Highlights**:
 - ✅ **Complete Platform**: All 7 phases of development complete
+- ✅ **Playwright Integration**: Browser automation within Docker containers
 - ✅ **Production Tested**: 31-session validation, 64 security tests passing
 - ✅ **Full Documentation**: Comprehensive guides, API docs, contribution guidelines
 - ✅ **Quality System**: Automated reviews, dashboard, trend tracking

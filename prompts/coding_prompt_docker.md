@@ -214,10 +214,10 @@ Bash({
   timeout: 10000
 })
 
-# ✅ CORRECT - Start servers via init.sh BEFORE session
+# ✅ CORRECT - Start servers via init.sh with smart waiting
 bash_docker({ command: "./init.sh" })  # Starts servers properly
-bash_docker({ command: "sleep 8" })     # Wait for startup
-bash_docker({ command: "curl -s http://localhost:5173 && echo 'Ready'" })  # Verify
+# Dynamic wait - proceeds as soon as server responds
+bash_docker({ command: "for i in {1..15}; do curl -s http://localhost:5173 > /dev/null 2>&1 && echo 'Ready' && break; sleep 1; done" })
 ```
 
 **If you must use background bash:**
@@ -241,7 +241,7 @@ bash_docker({ command: "curl -s http://localhost:5173 && echo 'Ready'" })  # Ver
 3. Edit tool: server/routes/api.js    → Modify file (relative path, runs on host)
 4. bash_docker: npm install           → Install deps (runs in container)
 5. bash_docker: node server/index.js  → Start server (runs in container)
-6. Playwright: Test at localhost:3001 → Browser testing via port forwarding
+6. Playwright: Test at localhost:3001 → Browser testing (runs inside container)
 7. bash_docker: git add . && git commit → Git operations (runs in container)
 ```
 
@@ -313,66 +313,40 @@ bash_docker({ command: "npm install" })  // File is already there!
 
 ## 🔧 SERVER LIFECYCLE MANAGEMENT (DOCKER MODE)
 
-**CRITICAL - Docker Requires Full Server Restart Between Sessions**
+**Docker Container - Clean Environment Each Session**
 
-**Why Docker is Different:**
-- Docker port forwarding can become stale between sessions
-- Container may restart, breaking port mappings
-- Servers from previous session may hold ports in undefined state
-- **MUST kill all servers at START and END of each session**
+**Container Behavior:**
+- Container is reused between coding sessions for speed
+- Processes from previous sessions are automatically cleaned up
+- Playwright runs inside the container - no port forwarding needed
+- No manual server cleanup required
 
-### At START of Session (MANDATORY)
+### Starting Servers
 
-**Always kill all servers before starting work:**
+**IMPORTANT: Check if servers exist before starting them!**
 
 ```bash
-# Kill servers by port (SAFE - won't kill MCP task-manager or other infrastructure)
-# This uses lsof to find processes listening on specific ports
-mcp__task-manager__bash_docker({ command: "lsof -ti:3001 | xargs -r kill -9 2>/dev/null; exit 0" })  # Backend API
-mcp__task-manager__bash_docker({ command: "lsof -ti:5173 | xargs -r kill -9 2>/dev/null; exit 0" })  # Vite frontend
-mcp__task-manager__bash_docker({ command: "lsof -ti:3000 | xargs -r kill -9 2>/dev/null; exit 0" })  # Alternative frontend port
-mcp__task-manager__bash_docker({ command: "sleep 1" })
+# First, check if server files exist
+mcp__task-manager__bash_docker({ command: "test -f server/index.js && echo 'Backend exists' || echo 'Backend not created yet'" })
 
-# Verify all stopped
-mcp__task-manager__bash_docker({ command: "curl -s http://localhost:3001/health && echo '⚠️ Backend still running' || echo '✅ Backend stopped'" })
-mcp__task-manager__bash_docker({ command: "curl -s http://localhost:5173 > /dev/null 2>&1 && echo '⚠️ Frontend still running' || echo '✅ Frontend stopped'" })
-```
+# If servers exist, start them
+mcp__task-manager__bash_docker({ command: "test -f server/index.js && (chmod +x init.sh && timeout 30 ./init.sh &) || echo 'Skipping server start - not created yet'" })
 
-**Then start fresh servers:**
-```bash
-# Start servers
-mcp__task-manager__bash_docker({ command: "chmod +x init.sh && ./init.sh" })
-
-# Wait for startup (Docker is slower than host)
-mcp__task-manager__bash_docker({ command: "sleep 8" })
-
-# Health check loop
+# If init.sh was run, wait for servers with health check
 mcp__task-manager__bash_docker({
-  command: "for i in {1..10}; do curl -s http://localhost:5173 > /dev/null && echo '✅ Frontend ready' && break; sleep 1; done"
+  command: "test -f server/index.js && for i in {1..15}; do curl -s http://localhost:5173 > /dev/null 2>&1 && echo '✅ Frontend ready' && break; echo 'Waiting...'; sleep 1; done || echo 'No servers to wait for'"
 })
 ```
 
-### At END of Session (MANDATORY)
+**Note:** In early sessions, servers may not exist yet. That's normal - create them first, then start them.
 
-**Always kill all servers cleanly:**
+### No Cleanup Needed at Session End
 
-```bash
-# Stop all servers (SAFE - kills by port, not by process pattern)
-mcp__task-manager__bash_docker({ command: "lsof -ti:3001 | xargs -r kill -9 2>/dev/null; exit 0" })  # Backend API
-mcp__task-manager__bash_docker({ command: "lsof -ti:5173 | xargs -r kill -9 2>/dev/null; exit 0" })  # Vite frontend
-mcp__task-manager__bash_docker({ command: "lsof -ti:3000 | xargs -r kill -9 2>/dev/null; exit 0" })  # Alternative frontend port
-mcp__task-manager__bash_docker({ command: "sleep 1" })
-
-# Verify stopped
-mcp__task-manager__bash_docker({ command: "curl -s http://localhost:3001/health && echo '⚠️ Backend still running' || echo '✅ Backend stopped'" })
-mcp__task-manager__bash_docker({ command: "curl -s http://localhost:5173 > /dev/null 2>&1 && echo '⚠️ Frontend still running' || echo '✅ Frontend stopped'" })
-```
-
-**Why this is necessary:**
-- Port forwarding reset between sessions
-- Container may have restarted
-- Prevents "port in use" errors
-- Ensures clean state for next session
+**Container advantages:**
+- Each project has its own isolated container
+- Processes don't interfere with other projects
+- Container remains available for next session
+- Dependencies stay installed for faster startup
 
 ### During Session - Restart Only When Code Changes
 
@@ -398,32 +372,35 @@ mcp__task-manager__bash_docker({ command: "curl -s http://localhost:3001/health 
 
 **Servers take LONGER to start in Docker than on host:**
 
-- **Vite dev server:** 5-10 seconds (vs 2-3s on host)
-- **Backend (Node):** 2-3 seconds
+- **Vite dev server:** 3-10 seconds (vs 2-3s on host)
+- **Backend (Node):** 1-3 seconds
 - **Container I/O:** Slower than native filesystem
 
-**Server startup best practice:**
+**Server startup best practice - Dynamic waiting:**
 ```bash
 # Start servers
 mcp__task-manager__bash_docker({ command: "./init.sh" })
 
-# Wait longer than you think (8+ seconds, NOT 3!)
-mcp__task-manager__bash_docker({ command: "sleep 8" })
-
-# Health check loop - wait until ready
+# Smart wait - checks every second instead of fixed delay
+# Will continue as soon as server responds (usually 3-5 seconds)
 mcp__task-manager__bash_docker({
-  command: "for i in {1..10}; do curl -s http://localhost:5173 > /dev/null && echo 'Frontend ready' && break; sleep 1; done"
+  command: "for i in {1..15}; do curl -s http://localhost:5173 > /dev/null 2>&1 && echo '✅ Ready' && break; echo 'Waiting...'; sleep 1; done"
 })
 
 # Now safe for Playwright
 ```
+
+**Benefits of dynamic waiting:**
+- Saves 3-5 seconds per session on average
+- Never proceeds before server is ready
+- Maximum wait time capped at 15 seconds
 
 **CRITICAL:** NEVER navigate to `http://localhost:5173` with Playwright until health check passes!
 
 **Common errors from insufficient wait time:**
 - `ERR_CONNECTION_REFUSED` - Server not started yet
 - `ERR_CONNECTION_RESET` - Server starting but not accepting connections
-- `ERR_SOCKET_NOT_CONNECTED` - Port forwarding not established
+- `ERR_EMPTY_RESPONSE` - Server crashed or not responding
 
 **Fix:** Increase sleep time to 8+ seconds, use health check loop before browser testing
 
@@ -510,9 +487,9 @@ git log --oneline -10
 
 ## STEP 2: MANAGE SERVER LIFECYCLE
 
-**Mode-specific instructions - see your preamble file for detailed guidance:**
+**Mode-specific instructions:**
 
-- **Docker Mode:** Kill all servers at START and END (port forwarding reset needed)
+- **Docker Mode:** Container handles cleanup automatically, Playwright runs inside
 - **Local Mode:** Keep servers running, use health checks (better UX, faster startup)
 
 **Quick reference:**
@@ -529,22 +506,25 @@ curl -s http://localhost:5173 > /dev/null 2>&1 && echo "Frontend running" || ech
 
 ## STEP 3: START SERVERS (If Not Running)
 
-**See your preamble for detailed startup instructions (mode-specific timing and commands).**
-
-**Quick reference:**
+**⚠️ IMPORTANT: In early sessions, server files may not exist yet!**
 
 ```bash
-# Check if servers are running
-curl -s http://localhost:3001/health || echo "Backend down"
-curl -s http://localhost:5173 || echo "Frontend down"
+# First check if server files exist
+mcp__task-manager__bash_docker({ command: "test -f server/index.js && echo '✅ Server files exist' || echo '⚠️ Server not created yet'" })
 
-# Start if needed (see preamble for mode-specific timing)
-chmod +x init.sh && ./init.sh
+# If servers exist AND not running, start them
+mcp__task-manager__bash_docker({
+  command: "if [ -f server/index.js ]; then curl -s http://localhost:3001/health > /dev/null 2>&1 || (chmod +x init.sh && timeout 30 ./init.sh &); else echo 'Skipping - server not created'; fi"
+})
+
+# Wait for servers if they were started
+mcp__task-manager__bash_docker({
+  command: "if [ -f server/index.js ]; then for i in {1..15}; do curl -s http://localhost:5173 > /dev/null 2>&1 && echo '✅ Ready' && break; sleep 1; done; fi"
+})
 ```
 
-**Key differences:**
-- **Docker:** Wait 8+ seconds (slower I/O), use health check loop
-- **Local:** Wait 3 seconds, servers start faster
+**If servers don't exist:** Continue with task implementation - you'll create them!
+**If init.sh hangs:** It has a 30-second timeout to prevent blocking
 
 **NEVER navigate to http://localhost:5173 with Playwright until health check passes!**
 
@@ -594,20 +574,62 @@ For each task:
 
 4. **Verify with browser (MANDATORY - every task, no exceptions):**
    ```javascript
-   // Navigate to app
-   mcp__playwright__browser_navigate({ url: "http://localhost:5173" })
+   // PLAYWRIGHT RUNS INSIDE DOCKER - No port forwarding needed!
 
-   // Take screenshot
-   mcp__playwright__browser_take_screenshot({ name: "task_NNN_verification" })
+   // First, ensure Playwright is installed
+   mcp__task-manager__bash_docker({ command: "npm list playwright 2>/dev/null || npm install playwright" })
 
-   // Check console errors
-   mcp__playwright__browser_console_messages({})
-   // Look for ERROR level - these are failures
+   // Create screenshots directory for Web UI visibility
+   mcp__task-manager__bash_docker({ command: "mkdir -p .playwright-mcp" })
 
-   // Test the specific feature you built
-   // - For API: Use browser_evaluate to call fetch()
-   // - For UI: Use browser_click, browser_fill_form, etc.
-   // - Take screenshots showing it works
+   // Create and run Playwright test script
+   mcp__task-manager__bash_docker({
+     command: `cat > /tmp/verify_task_NNN.js << 'EOF'
+const { chromium } = require('playwright');
+(async () => {
+  const browser = await chromium.launch({
+    headless: true,
+    args: ['--no-sandbox', '--disable-setuid-sandbox']
+  });
+  const page = await browser.newPage();
+
+  // Capture console errors
+  const errors = [];
+  page.on('console', msg => {
+    if (msg.type() === 'error') errors.push(msg.text());
+  });
+
+  // Navigate to app (localhost works inside container!)
+  await page.goto('http://localhost:5173');
+
+  // Take screenshot - MUST be in .playwright-mcp/ for Web UI
+  await page.screenshot({ path: '.playwright-mcp/task_NNN.png' });
+
+  // Test the specific feature (example: API endpoint)
+  const apiResponse = await page.evaluate(async () => {
+    const res = await fetch('/api/endpoint');
+    return await res.json();
+  });
+
+  // Output results
+  console.log(JSON.stringify({
+    success: errors.length === 0,
+    title: await page.title(),
+    errors: errors,
+    apiResponse: apiResponse,
+    screenshot: '.playwright-mcp/task_NNN.png'
+  }, null, 2));
+
+  await browser.close();
+})();
+EOF
+node /tmp/verify_task_NNN.js`
+   });
+
+   // Clean up temporary test script
+   mcp__task-manager__bash_docker({ command: "rm -f /tmp/verify_task_NNN.js" });
+
+   // Check the output for success/errors
    ```
 
 5. **Mark tests passing:** `mcp__task-manager__update_test_result` with `passes: true` for EACH test
@@ -660,7 +682,7 @@ browser_take_screenshot({ name: "verification.png" })         // ❌ No task ID
 ❌ **WRONG - Grouping tasks:**
 ```javascript
 // Complete tasks 1547, 1548, 1549, 1550, 1551
-browser_take_screenshot({ name: "task_1547_to_1551.png" })
+browser_take_screenshot({ name: ".playwright-mcp/task_1547_to_1551.png" })
 // ❌ This verifies 5 tasks with 1 screenshot - NOT ALLOWED
 ```
 
@@ -669,21 +691,24 @@ browser_take_screenshot({ name: "task_1547_to_1551.png" })
 // Task 1547
 start_task({ task_id: 1547 })
 ... implement ...
-browser_take_screenshot({ name: "task_1547_users_table.png" })
+// Screenshots MUST be in .playwright-mcp/ for Web UI visibility
+browser_take_screenshot({ name: ".playwright-mcp/task_1547_users_table.png" })
 update_task_status({ task_id: 1547, done: true })
 
 // Task 1548
 start_task({ task_id: 1548 })
 ... implement ...
-browser_take_screenshot({ name: "task_1548_conversations_table.png" })
+// Screenshots MUST be in .playwright-mcp/ for Web UI visibility
+browser_take_screenshot({ name: ".playwright-mcp/task_1548_conversations_table.png" })
 update_task_status({ task_id: 1548, done: true })
 ```
 
-**Naming Guidelines:**
-- Format: `task_{TASK_ID}_{description}.png`
+**Screenshot Guidelines:**
+- Location: MUST be in `.playwright-mcp/` directory for Web UI visibility
+- Format: `.playwright-mcp/task_{TASK_ID}_{description}.png`
 - Task ID: The actual task ID from the database (e.g., 1547, 1548)
 - Description: Short, snake_case description (e.g., `users_table`, `login_form`, `api_response`)
-- Examples: `task_1547_users_table.png`, `task_15_homepage_loaded.png`, `task_203_error_handling.png`
+- Examples: `.playwright-mcp/task_1547_users_table.png`, `.playwright-mcp/task_15_homepage_loaded.png`
 
 **Why this matters:**
 - Each screenshot documents what THAT specific task accomplished
@@ -767,8 +792,8 @@ Current Epic: #N - Name
 git status
 ```
 
-**Server cleanup (mode-specific - see preamble):**
-- **Docker Mode:** Kill all servers (mandatory - port forwarding reset)
+**Server cleanup:**
+- **Docker Mode:** No cleanup needed - container isolation handles it
 - **Local Mode:** Keep servers running (better UX for next session)
 
 Session complete. Agent will auto-continue to next session if configured.
@@ -779,90 +804,118 @@ Session complete. Agent will auto-continue to next session if configured.
 
 **Must verify EVERY task through browser. No backend-only exceptions.**
 
+**IMPORTANT: Playwright runs INSIDE Docker container - no external MCP tools!**
+
 **Pattern for API endpoints:**
 ```javascript
-// 1. Load app
-mcp__playwright__browser_navigate({ url: "http://localhost:5173" })
+// Install Playwright if needed
+mcp__task-manager__bash_docker({ command: "npm list playwright || npm install playwright" })
 
-// 2. Call API via browser console
-mcp__playwright__browser_evaluate({
-  code: `fetch('/api/endpoint').then(r => r.json()).then(console.log)`
+// Create test script
+mcp__task-manager__bash_docker({
+  command: `cat > /tmp/api_test.js << 'EOF'
+const { chromium } = require('playwright');
+(async () => {
+  const browser = await chromium.launch({
+    headless: true,
+    args: ['--no-sandbox', '--disable-setuid-sandbox']
+  });
+  const page = await browser.newPage();
+
+  // Capture errors
+  const errors = [];
+  page.on('console', msg => {
+    if (msg.type() === 'error') errors.push(msg.text());
+  });
+
+  // Load app and test API
+  await page.goto('http://localhost:5173');
+
+  const apiData = await page.evaluate(async () => {
+    const response = await fetch('/api/endpoint');
+    return await response.json();
+  });
+
+  // Screenshot - MUST be in .playwright-mcp/ for Web UI
+  await page.screenshot({ path: '.playwright-mcp/task_verified.png' });
+
+  console.log(JSON.stringify({
+    success: errors.length === 0,
+    apiData: apiData,
+    errors: errors
+  }, null, 2));
+
+  await browser.close();
+})();
+EOF
+node /tmp/api_test.js`
 })
 
-// 3. Check for errors
-mcp__playwright__browser_console_messages({})
-
-// 4. Screenshot proof
-mcp__playwright__browser_take_screenshot({ name: "task_verified" })
+// Clean up temporary test script
+mcp__task-manager__bash_docker({ command: "rm -f /tmp/api_test.js" })
 ```
 
-**Tools available:** `browser_navigate`, `browser_click`, `browser_fill_form`, `browser_type`, `browser_take_screenshot`, `browser_console_messages`, `browser_wait_for`, `browser_evaluate`
+**No external Playwright MCP tools - everything runs inside Docker!**
 
 **Screenshot limitations:**
 - ⚠️ **NEVER use `fullPage: true`** - Can exceed 1MB buffer limit and crash session
 - ✅ Use viewport screenshots (default behavior)
 - If you need to see below fold, scroll and take multiple viewport screenshots
 
-**Snapshot usage warnings (CRITICAL):**
-- ⚠️ **Use `browser_snapshot` SPARINGLY** - Can return 20KB-50KB+ of HTML on complex pages
-- ⚠️ **Avoid snapshots on dashboards/data tables** - Too much HTML, risks buffer overflow
-- ⚠️ **Avoid snapshots in loops** - Wastes tokens, risks session crash
-- ✅ **Prefer CSS selectors over snapshot refs:** Use `browser_click({ selector: ".btn" })` instead
-- ✅ **Use screenshots for visual verification** - Lightweight and reliable
-- ✅ **Use console messages for error checking** - More efficient than parsing HTML
+**Common patterns with Playwright inside Docker:**
 
-**When snapshots are safe:**
-- Simple pages with < 500 DOM nodes
-- Need to discover available selectors
-- Debugging specific layout issues
-
-**When to AVOID snapshots:**
-- Dashboard pages with lots of data
-- Pages with large tables or lists
-- Complex SPAs with deeply nested components
-- Any page that "feels" heavy when loading
-
-**Better pattern - Direct selectors instead of snapshots:**
 ```javascript
-// ❌ RISKY - Snapshot may be 30KB+ on complex page
-snapshot = browser_snapshot()  // Returns massive HTML dump
-// Parse through HTML to find button reference...
-browser_click({ ref: "e147" })
+// Simple verification
+mcp__task-manager__bash_docker({
+  command: `node -e "
+    const { chromium } = require('playwright');
+    (async () => {
+      const browser = await chromium.launch({
+        headless: true,
+        args: ['--no-sandbox', '--disable-setuid-sandbox']
+      });
+      const page = await browser.newPage();
+      await page.goto('http://localhost:5173');
+      await page.screenshot({ path: '.playwright-mcp/verification.png' });
+      const title = await page.title();
+      console.log('Page title:', title);
+      await browser.close();
+    })();
+  "`
+});
 
-// ✅ BETTER - Lightweight, no snapshot needed
-browser_click({ selector: "button.submit-btn" })
-browser_take_screenshot({ name: "after_click" })
-browser_console_messages()  // Check for errors
+// Form interaction
+mcp__task-manager__bash_docker({
+  command: `cat > /tmp/form_test.js << 'EOF'
+const { chromium } = require('playwright');
+(async () => {
+  const browser = await chromium.launch({
+    headless: true,
+    args: ['--no-sandbox', '--disable-setuid-sandbox']
+  });
+  const page = await browser.newPage();
+  await page.goto('http://localhost:5173');
+
+  // Fill and submit form
+  await page.fill('#email', 'test@example.com');
+  await page.fill('#password', 'testpass');
+  await page.click('#submit');
+
+  // Wait for result
+  await page.waitForSelector('#success', { timeout: 5000 });
+
+  await page.screenshot({ path: '.playwright-mcp/form_submitted.png' });
+  console.log('Form test passed');
+
+  await browser.close();
+})();
+EOF
+node /tmp/form_test.js`
+});
+
+// Clean up temporary test script
+mcp__task-manager__bash_docker({ command: "rm -f /tmp/form_test.js" })
 ```
-
-**If you get "Tool output too large" errors:**
-1. STOP using `browser_snapshot()` on that page
-2. Switch to direct CSS selectors: `button.class-name`, `#element-id`, `[data-testid="name"]`
-3. Use browser DevTools knowledge to construct selectors
-4. Take screenshots to verify visually
-5. Document in session notes that page is too complex for snapshots
-
-**Playwright snapshot lifecycle (CRITICAL):**
-```javascript
-// ❌ WRONG PATTERN - Snapshot refs expire after page changes!
-snapshot1 = browser_snapshot()  // Get element refs (e46, e47, etc.)
-browser_type({ ref: "e46", text: "Hello" })  // Page re-renders
-browser_click({ ref: "e47" })  // ❌ ERROR: Ref e47 expired!
-
-// ✅ CORRECT PATTERN - Retake snapshot after each page-changing action
-snapshot1 = browser_snapshot()  // Get initial refs
-browser_type({ ref: "e46", text: "Hello" })  // Page changes
-snapshot2 = browser_snapshot()  // NEW snapshot with NEW refs
-browser_click({ ref: "e52" })  // Use ref from snapshot2
-```
-
-**Rule:** Snapshot references (e46, e47, etc.) become invalid after:
-- Typing text (triggers re-renders)
-- Clicking buttons (may cause navigation/state changes)
-- Page navigation
-- Any DOM modification
-
-**Always:** Retake `browser_snapshot()` after page-changing actions before using element refs.
 
 **Why mandatory:** Backend changes can break frontend. Console errors only visible in browser. Users experience app through browser, not curl.
 
@@ -922,7 +975,7 @@ browser_click({ ref: "e52" })  // Use ref from snapshot2
 
 **Connection Refused Errors (`ERR_CONNECTION_REFUSED`, `ERR_CONNECTION_RESET`):**
 - Cause: Server not fully started yet
-- Fix: Wait longer (8+ seconds), use health check loop
+- Fix: Use health check loop (dynamic waiting)
 - Verify: `curl -s http://localhost:5173` before Playwright navigation
 
 **Native Module Errors (better-sqlite3, sharp, canvas, etc.):**

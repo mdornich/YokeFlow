@@ -190,7 +190,7 @@ class DockerSandbox(Sandbox):
         self.client: Optional[Any] = None  # Docker client (reused across commands)
 
         # Docker configuration
-        self.image = self.config.get("image", "yokeflow-playwright:latest")
+        self.image = self.config.get("image", "node:20-slim")
         self.network = self.config.get("network", "bridge")
         self.memory_limit = self.config.get("memory_limit", "2g")
         self.cpu_limit = self.config.get("cpu_limit", "2.0")
