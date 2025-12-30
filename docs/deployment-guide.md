@@ -1,21 +1,32 @@
 # Deployment Guide - Digital Ocean
 
-**Last Updated:** December 24, 2025
-**Status:** ⚠️ Experimental - Not Fully Tested
+**Last Updated:** December 30, 2025
+**Status:** ✅ Deployment Verified - Application Testing Needed
 
-> **⚠️ IMPORTANT NOTICE:**
+> **📋 DEPLOYMENT STATUS:**
 >
-> This deployment guide is **experimental** and has not been thoroughly tested with the current version of YokeFlow. An earlier version was successfully deployed to Digital Ocean, but this guide needs comprehensive testing and validation with the latest codebase.
+> This deployment guide has been **successfully tested** with YokeFlow v1.2.0 on Digital Ocean (December 30, 2025).
 >
 > **Current Status:**
-> - ✅ Basic deployment steps verified with earlier version
-> - ⚠️ Needs testing with current YokeFlow branding and features
-> - ⚠️ May require adjustments for Docker container management features
-> - ⚠️ Some configurations may be outdated
+> - ✅ Deployment steps verified and working on Digital Ocean
+> - ✅ All services start successfully (PostgreSQL, API, Web UI)
+> - ✅ Database initialization works (manual step required - see Phase 5)
+> - ✅ Nginx reverse proxy configuration correct
+> - ✅ Docker container management operational
+> - ⚠️ **Application functionality not thoroughly tested** (initialization, coding sessions, etc.)
 >
-> **This guide will be updated and fully tested in a future release.**
+> **Known Issues:**
+> - Database schema auto-initialization may fail silently on first run (fix included in Phase 5)
+> - Solution: Manually run schema.sql as documented in Phase 5
 >
-> If you attempt deployment using this guide, please report any issues or required changes via GitHub Issues.
+> **Testing Needed:**
+> - Project initialization (Session 0)
+> - Coding sessions (Sessions 1+)
+> - Browser verification with Playwright
+> - WebSocket real-time updates
+> - Quality review system
+>
+> If you encounter issues with application functionality, please report them via GitHub Issues.
 
 ---
 
@@ -331,15 +342,51 @@ yokeflow_postgres        Up 30 seconds (healthy)
 
 ### Phase 5: Initialize Database
 
-```bash
-# Database schema is automatically initialized via docker-compose.yml
-# Verify database is ready
-docker exec yokeflow_postgres \
-  psql -U agent -d yokeflow -c "SELECT version();"
+The database schema is automatically initialized **on first run** via the volume mount in `docker-compose.yml`:
 
-# Check tables were created
+```yaml
+volumes:
+  - ./schema/postgresql:/docker-entrypoint-initdb.d:ro
+```
+
+PostgreSQL runs all `.sql` files in this directory in **alphabetical order** when starting with an empty data directory.
+
+**IMPORTANT:** This only works when PostgreSQL starts with an empty data directory. If you already have a volume from a previous run, the schema will NOT be re-initialized.
+
+#### Verify Schema Initialization
+
+```bash
+# Check if tables were created automatically
 docker exec yokeflow_postgres \
   psql -U agent -d yokeflow -c "\dt"
+
+# Expected output: 9 tables (projects, epics, tasks, tests, sessions, etc.)
+```
+
+#### If Tables Were NOT Created (Manual Initialization)
+
+If the `\dt` command shows "Did not find any relations" or is missing tables, manually initialize the schema:
+
+```bash
+# Manually initialize schema (works for both fresh and existing databases)
+docker exec -i yokeflow_postgres \
+  psql -U agent -d yokeflow < schema/postgresql/schema.sql
+
+# Verify tables exist
+docker exec yokeflow_postgres \
+  psql -U agent -d yokeflow -c "\dt"
+
+# Expected output: 9 tables listed
+```
+
+**Common cause:** If you see initialization failures in docker logs (`docker compose logs postgres`), this usually means there are multiple `.sql` files in `schema/postgresql/` that are running in the wrong order. The directory should **only contain `schema.sql`**. Migration files should have been removed in v1.1.0.
+
+#### Verify Database Connection
+
+```bash
+# Test PostgreSQL is responding
+docker exec yokeflow_postgres \
+  psql -U agent -d yokeflow -c "SELECT version();"
 
 # If container name is different, check with:
 docker compose ps
@@ -410,10 +457,10 @@ map $http_upgrade $connection_upgrade {
 EOF
 
 # Create site configuration file
-cat > /etc/nginx/sites-available/autonomous-coding <<'EOF'
+cat > /etc/nginx/sites-available/yokeflow <<'EOF'
 server {
     listen 80;
-    server_name autonomous-coding.yourdomain.com;
+    server_name yokeflow.yourdomain.com;
 
     # ACME challenge for Let's Encrypt SSL certificate
     location /.well-known/acme-challenge/ {
@@ -470,7 +517,7 @@ server {
 EOF
 
 # Enable site
-ln -s /etc/nginx/sites-available/autonomous-coding /etc/nginx/sites-enabled/
+ln -s /etc/nginx/sites-available/yokeflow /etc/nginx/sites-enabled/
 rm /etc/nginx/sites-enabled/default  # Remove default site
 
 # Create ACME challenge directory for Let's Encrypt
@@ -756,7 +803,7 @@ Add an ACME challenge location block to your Nginx configuration:
 
 ```bash
 # Edit Nginx config
-vim /etc/nginx/sites-available/autonomous-coding
+vim /etc/nginx/sites-available/yokeflow
 ```
 
 Add this location block **at the top of the server block**, before the proxy locations:
