@@ -84,6 +84,22 @@ export function getModelDisplayName(modelId: string): string {
 }
 
 /**
+ * Get session type display name
+ */
+export function getSessionTypeDisplayName(type: string): string {
+  switch (type) {
+    case 'initializer':
+      return 'Initializer';
+    case 'coding':
+      return 'Coding';
+    case 'review':
+      return 'Review';
+    default:
+      return type;
+  }
+}
+
+/**
  * Get status badge color
  */
 export function getStatusColor(status: string): string {
@@ -91,23 +107,14 @@ export function getStatusColor(status: string): string {
     case 'completed':
       return 'bg-green-500';
     case 'running':
-      return 'bg-blue-500 animate-pulse';
-    case 'pending':
-      return 'bg-gray-500';
-    case 'interrupted':
-      return 'bg-yellow-500';
-    case 'error':
+      return 'bg-purple-500';
+    case 'failed':
       return 'bg-red-500';
+    case 'cancelled':
+      return 'bg-yellow-500';
     default:
       return 'bg-gray-500';
   }
-}
-
-/**
- * Get session type display name
- */
-export function getSessionTypeDisplayName(type: string): string {
-  return type === 'initializer' ? 'Init' : 'Coding';
 }
 
 /**
@@ -115,17 +122,29 @@ export function getSessionTypeDisplayName(type: string): string {
  */
 export function truncate(text: string, maxLength: number): string {
   if (text.length <= maxLength) return text;
-  return text.slice(0, maxLength) + '...';
+  return text.slice(0, maxLength - 3) + '...';
 }
 
 /**
  * Calculate duration between two dates
  */
-export function calculateDuration(startDate: string | null, endDate: string | null): number | null {
-  if (!startDate || !endDate) return null;
+export function calculateDuration(start: string | Date, end: string | Date | null): number {
+  const startTime = new Date(start).getTime();
+  const endTime = end ? new Date(end).getTime() : Date.now();
+  return Math.round((endTime - startTime) / 1000);
+}
 
-  const start = new Date(startDate).getTime();
-  const end = new Date(endDate).getTime();
+/**
+ * Format bytes to human-readable format
+ */
+export function formatBytes(bytes: number, decimals = 2): string {
+  if (bytes === 0) return '0 Bytes';
 
-  return (end - start) / 1000; // Return seconds
+  const k = 1024;
+  const dm = decimals < 0 ? 0 : decimals;
+  const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
 }

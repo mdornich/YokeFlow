@@ -29,6 +29,14 @@
 - No need to "wait for sync" or check with ls
 - Trust the volume mount - it works!
 
+**5. Browser verification = WORKFLOW TESTING (NOT just screenshots!):**
+- ❌ WRONG: Take a screenshot and call it "verified"
+- ❌ WRONG: Navigate to page, screenshot, done
+- ✅ CORRECT: Test the complete user workflow with interactions
+- ✅ CORRECT: Check console for errors (MANDATORY - every UI test)
+- ✅ CORRECT: Click buttons, fill forms, verify results
+- **Rule: If verifying UI, you MUST test user interactions AND check console errors. Screenshots alone prove nothing.**
+
 ## 📋 Simple Rule
 
 **For all file operations (reading, creating, editing files):**
@@ -98,10 +106,15 @@ Container: /workspace/
 ### For Reading/Creating/Editing Files → Use Read, Write, and Edit Tools
 
 - ✅ `Read` - Read files (runs on HOST!)
-- ✅ `Write` - Create new files (runs on HOST!)
-- ✅ `Edit` - Edit existing files (runs on HOST!)
+- ✅ `Write` - Create new files OR overwrite existing files (runs on HOST!)
+- ✅ `Edit` - Edit existing files (runs on HOST!) **⚠️ REQUIRES Read first!**
 - ✅ **No escaping issues** - backticks, quotes, all preserved perfectly
 - ✅ Files sync to container at `/workspace` immediately via volume mount
+
+**🚨 CRITICAL - Tool Prerequisites:**
+- **Write tool**: Can create new files OR overwrite existing files without Read
+- **Edit tool**: MUST Read the file first before attempting Edit
+- **If you see "File has not been read yet" error**: You tried Edit without Read - always Read first!
 
 **CRITICAL - File Paths for Read/Write/Edit Tools:**
 
@@ -117,10 +130,36 @@ Container: /workspace/
 - Read/Write/Edit tools run on HOST → need HOST paths (relative from project root)
 - bash_docker runs in CONTAINER → uses CONTAINER paths (`/workspace/...`)
 
-**If you see "File does not exist" errors with Read/Write/Edit:**
+**Common File Operation Errors and Recovery:**
+
+**"File does not exist" error:**
 1. Check if you used `/workspace/` prefix → Remove it, use relative path
 2. Verify file exists: `bash_docker({ command: "ls -la server/" })`
 3. Then use correct relative path: `Read({ file_path: "server/routes/claude.js" })`
+
+**"File has not been read yet" error on Edit/Write:**
+1. This means you tried to Edit without Reading first
+2. Solution: ALWAYS Read the file before Edit
+3. Recovery steps:
+   ```javascript
+   // Step 1: Read the file first
+   Read({ file_path: "path/to/file.js" })
+
+   // Step 2: NOW you can Edit it
+   Edit({
+     file_path: "path/to/file.js",
+     old_string: "...",
+     new_string: "..."
+   })
+   ```
+4. If Write gives this error on an existing file, Read it first OR just use Write to overwrite
+
+**If you get stuck in error loops:**
+1. STOP trying the same operation repeatedly
+2. Check your file path (no /workspace/ prefix!)
+3. Use bash_docker to verify file exists and location
+4. For Edit: ALWAYS Read first
+5. For Write: Can create new OR overwrite (no Read required)
 
 **Examples - Correct Tool Usage:**
 
@@ -155,11 +194,22 @@ Write({
 })
 ```
 
-✅ **Editing a file:**
+✅ **Editing a file (MUST READ FIRST!):**
 ```javascript
-// CORRECT - Relative path
+// CORRECT - Always Read before Edit
+// Step 1: Read the file
+Read({ file_path: "server/config.js" })
+
+// Step 2: Now Edit it
 Edit({
   file_path: "server/config.js",
+  old_string: "PORT = 3000",
+  new_string: "PORT = 3001"
+})
+
+// WRONG - Edit without Read
+Edit({
+  file_path: "server/config.js",  // ❌ Error: File has not been read yet
   old_string: "PORT = 3000",
   new_string: "PORT = 3001"
 })
@@ -511,6 +561,81 @@ mcp__task-manager__bash_docker({
 
 ---
 
+## 🐳 DOCKER SERVICES HANDLING
+
+**IMPORTANT:** Your project may have Docker services (PostgreSQL, Redis, MinIO, etc.) running on the HOST with shifted ports.
+
+### Service Connection from Container
+
+When your application needs to connect to Docker services:
+
+1. **Check if docker-compose.yml exists:**
+```bash
+mcp__task-manager__bash_docker({ command: "test -f docker-compose.yml && echo 'Docker services configured' || echo 'No Docker services'" })
+```
+
+2. **Services run on HOST with shifted ports:**
+- PostgreSQL: `host.docker.internal:5433` (NOT localhost:5432)
+- Redis: `host.docker.internal:6380` (NOT localhost:6379)
+- MinIO: `host.docker.internal:9002` (NOT localhost:9000)
+
+3. **Use environment-aware connection strings:**
+```javascript
+// In your application code
+const dbUrl = process.env.DOCKER_ENV === 'true'
+  ? 'postgresql://user:pass@host.docker.internal:5433/db'  // From container
+  : 'postgresql://user:pass@localhost:5433/db';            // From host
+```
+
+### Starting Project Services
+
+**Services should already be running** (started by init.sh during initialization), but verify:
+
+```bash
+# Check if services are running (from container perspective)
+mcp__task-manager__bash_docker({
+  command: "nc -zv host.docker.internal 5433 2>&1 | grep -q succeeded && echo '✅ PostgreSQL accessible' || echo '❌ PostgreSQL not accessible'"
+})
+
+# If services aren't running, they need to be started ON THE HOST with the Bash command
+
+# Note: You can't start them with the bash_docker command but you can start them on the host
+# Use the following docker command:
+
+Bash({ command: "docker-compose up -d" })
+
+
+### Common Connection Patterns
+
+**PostgreSQL connection test:**
+```bash
+mcp__task-manager__bash_docker({
+  command: "PGPASSWORD=myapp_dev psql -h host.docker.internal -p 5433 -U myapp -d myapp -c 'SELECT 1' && echo '✅ Database connected'"
+})
+```
+
+**Redis connection test:**
+```bash
+mcp__task-manager__bash_docker({
+  command: "redis-cli -h host.docker.internal -p 6380 ping && echo '✅ Redis connected'"
+})
+```
+
+### Troubleshooting Services
+
+If services aren't accessible:
+1. They should have been started by init.sh on the HOST
+2. Check the docker-compose.yml for correct port mappings
+3. Verify using netcat: `nc -zv host.docker.internal PORT`
+4. Services CANNOT be started from inside the container (Docker-in-Docker limitation)
+
+**Remember:**
+- ✅ Connect to `host.docker.internal:SHIFTED_PORT` from container
+- ❌ Never try to start Docker services from inside the container
+- ✅ Services run on HOST with shifted ports to avoid conflicts
+
+---
+
 **When you see "bash tool" in instructions below, interpret as `bash_docker` in Docker mode.**
 
 ---
@@ -555,6 +680,78 @@ Continue until you hit a stopping condition:
 - ✅ **For temporary directory changes:** Use subshells: `(cd server && npm test)`
 - **Why:** Docker container has different filesystem. Host paths ≠ container paths.
 
+---
+
+## 🚨 RETRY LIMITS & DIAGNOSTIC REQUIREMENTS (CRITICAL)
+
+### The Two-Attempt Rule
+**You may attempt any operation MAXIMUM TWICE before diagnosis:**
+- First attempt fails → Try once more with minor adjustment (e.g., add sleep, different approach)
+- Second attempt fails → **STOP!** You MUST read logs/diagnose before ANY third attempt
+
+### Mandatory Log Reading Protocol
+When a command fails twice, you MUST:
+1. **Identify where output was captured:**
+   - Server logs: `server.log`, `web.log`, `build.log`
+   - Command output: stderr/stdout from the failed command
+   - System logs: `dmesg`, `journalctl`, container logs
+
+2. **Read the ENTIRE relevant section:**
+   ```bash
+   # For server failures
+   tail -100 server.log
+
+   # For build failures
+   cat build.log | grep -A10 -B10 "Error\|error\|Failed"
+
+   # For test failures
+   cat test-results.log
+   ```
+
+3. **Identify the specific error:**
+   - Missing dependency → Install it
+   - Port conflict → Kill process or change port
+   - Schema error → Fix validation issue
+   - Syntax error → Fix the code
+   - Permission error → Adjust permissions
+
+4. **Fix the root cause BEFORE retrying**
+
+### Infinite Loop Prevention
+**If you've attempted the same operation 3+ times:**
+1. **STOP immediately** - Do not attempt a 4th time
+2. **Document the blocker** (see Blocker Documentation below)
+3. **Skip to next task** OR end session with clear documentation
+
+### Blocker Documentation Protocol
+When stuck after 3 attempts, create/update `claude-progress.md`:
+```markdown
+## BLOCKER - [Session X] - [Timestamp]
+**Task:** [Task ID and description]
+**Issue:** [Specific error message]
+**Root Cause:** [Your diagnosis]
+
+**Attempted Solutions:**
+1. [First attempt and result]
+2. [Second attempt and result]
+3. [Third attempt and result]
+
+**Requires:** [What's needed to fix]
+- [ ] Human intervention to fix [specific issue]
+- [ ] Infrastructure change (Redis, database, etc.)
+- [ ] Dependency update (breaking change)
+- [ ] Configuration adjustment
+
+**Workaround:** [If any temporary solution exists]
+**Impact:** [What's blocked by this issue]
+```
+
+Then either:
+- Skip to next available task that doesn't depend on blocked infrastructure
+- End session if no other work is possible
+
+---
+
 **Context Management (CRITICAL):**
 - **Check message count BEFORE starting each new task** - Look at "Assistant Message N" in your recent responses
 - **If you've sent 45+ messages this session:** STOP and wrap up (approaching 150K token compaction limit)
@@ -564,15 +761,17 @@ Continue until you hit a stopping condition:
 - **Better to:** Stop cleanly and let next session continue with fresh context
 - **Red flags:** If you see `compact_boundary` messages, you've gone too far - should have stopped 10 messages earlier
 
-**🚨 BROWSER VERIFICATION IS MANDATORY (CRITICAL - READ CAREFULLY):**
-- ❌ **NEVER mark a test as passing (`update_test_result` with `passes: true`) without a successful browser verification screenshot**
-- ❌ **NEVER mark a task as complete without browser verification of ALL its tests**
-- ❌ **NEVER skip verification because of a connection error** - You MUST retry (see retry protocol below)
-- ❌ **NEVER "batch verify" multiple tasks with one screenshot** - Each task needs its own verification
-- ✅ **Every test requires:** Screenshot saved + console errors checked + screenshot filename logged
-- ✅ **If verification fails:** Fix the issue and retry, do NOT mark test as passing
-- ✅ **If connection error:** Follow the 3-attempt retry protocol (see STEP 6)
-- **Why:** Sessions that skip verification have 2.6/10 average quality. Browser testing catches 73% of issues that backend-only testing misses.
+**🚨 APPROPRIATE VERIFICATION IS MANDATORY (CRITICAL - READ CAREFULLY):**
+- ❌ **NEVER mark a test as passing (`update_test_result` with `passes: true`) without appropriate verification for the task type**
+- ❌ **NEVER skip verification because it seems unnecessary** - Every task needs verification matching its type
+- ❌ **NEVER use browser testing for non-UI tasks** - Use the right tool for the job
+- ❌ **NEVER "batch verify" multiple tasks with one test** - Each task needs its own verification
+- ✅ **UI Tasks:** Browser testing with screenshots + console error checking
+- ✅ **API Tasks:** curl/fetch verification of endpoints + response validation
+- ✅ **Config Tasks:** Build/compile verification + dependency checks
+- ✅ **Database Tasks:** Schema verification + query testing
+- ✅ **Integration Tasks:** Full E2E browser workflows with multiple steps
+- **Why:** Using appropriate testing reduces session time by 30-40% while maintaining quality. Browser testing for config tasks wastes time; curl testing for UI tasks misses visual bugs.
 
 ---
 
@@ -647,7 +846,69 @@ cat claude-progress.md | grep -i "blocker\|known issue"
 
 ---
 
-## STEP 5: GET TASKS FOR THIS SESSION
+## STEP 5: INFRASTRUCTURE VALIDATION (REQUIRED BEFORE TASKS)
+
+**Before starting ANY coding task, verify infrastructure:**
+
+### Server Health Checks
+```bash
+# Check if backend is running
+mcp__task-manager__bash_docker({
+  command: "curl -s http://localhost:3001/health || echo 'Backend not running'"
+})
+
+# Check if frontend is running
+mcp__task-manager__bash_docker({
+  command: "curl -s http://localhost:5173 || echo 'Frontend not running'"
+})
+
+# If servers not running, start them FIRST (see below)
+```
+
+### Server Startup Protocol (if needed)
+**NEVER combine startup with health checks in one command!**
+
+```bash
+# Step 1: Check for port conflicts
+bash_docker({ command: "lsof -i :3001 -i :5173 | grep LISTEN || echo 'Ports clear'" })
+
+# Step 2: Start servers with log capture
+bash_docker({ command: "(cd server && npm start > ../server.log 2>&1 &) && echo 'Backend starting'" })
+bash_docker({ command: "(cd web && npm run dev > ../web.log 2>&1 &) && echo 'Frontend starting'" })
+
+# Step 3: Wait and verify process started
+bash_docker({ command: "sleep 3" })
+bash_docker({ command: "ps aux | grep node | grep -v grep || echo 'No node process found'" })
+
+# Step 4: Check health endpoints
+bash_docker({ command: "curl -s http://localhost:3001/health || echo 'Backend not ready'" })
+
+# Step 5: If health check fails, READ THE LOGS
+# bash_docker({ command: "tail -50 server.log" })
+# Fix the issue found in logs before retrying
+```
+
+### Dependency Verification
+```bash
+# For Prisma projects
+mcp__task-manager__bash_docker({
+  command: "npx prisma --version || echo 'Prisma not installed'"
+})
+
+# For projects with Redis/external services
+mcp__task-manager__bash_docker({
+  command: "redis-cli ping 2>/dev/null || echo 'Redis not available - may block some features'"
+})
+```
+
+**If infrastructure is broken:**
+1. Try to fix it (max 2 attempts per issue)
+2. If can't fix, document as BLOCKER (see retry limits section)
+3. Skip to tasks that don't require broken infrastructure
+
+---
+
+## STEP 6: GET TASKS FOR THIS SESSION
 
 ```bash
 # Get next task
@@ -664,47 +925,81 @@ mcp__task-manager__list_tasks | grep -A5 "current epic"
 
 ---
 
-## STEP 6: IMPLEMENT TASKS
+## STEP 7: IMPLEMENT TASKS
 
 For each task:
 
 1. **Mark started:** `mcp__task-manager__start_task` with `task_id`
 
 2. **Implement:** Follow task's `action` field instructions
-   - Use Write/Edit tools for files (relative paths!)
-   - Use bash_docker for commands
-   - Handle errors gracefully
+
+   **Pre-Implementation Checks:**
+   - Verify required tools exist before using them:
+     ```bash
+     # Before using any CLI tool
+     which [tool] || npm list [tool] || echo "[Tool] not found - install first"
+     ```
+   - Check dependencies mentioned in task:
+     ```bash
+     # Example for a task requiring Prisma
+     npx prisma --version || pnpm add -D prisma
+     ```
+
+   **File Operations:**
+   - Use Write for new files OR overwriting (relative paths!)
+   - Use Edit for modifying existing files (ALWAYS Read first!)
+   - Use bash_docker for all commands
+   - Handle errors gracefully - don't repeat failing operations
+   - **File Operation Workflow:**
+     - New file → Write directly
+     - Existing file to modify → Read → Edit
+     - Existing file to replace → Write directly (overwrites)
 
 3. **Restart servers if backend changed (see preamble for mode-specific commands):**
    - Docker: Use `lsof -ti:3001 | xargs -r kill -9` then restart (SAFE - kills by port, not pattern)
    - Local: Use `lsof -ti:3001 | xargs kill -9` (targeted, doesn't kill Web UI)
 
-4. **🚨 MANDATORY: Verify with browser (EVERY task, NO exceptions, MUST complete before step 5):**
+4. **🚨 SMART VERIFICATION: Choose the right testing approach for each task type:**
 
-   **⚠️ VERIFICATION CHECKPOINT - YOU CANNOT PROCEED WITHOUT THIS:**
-   
-   Before moving to step 5, you MUST have:
-   - [ ] Successfully loaded the page in Playwright
-   - [ ] Taken a screenshot saved to `.playwright-mcp/task_{TASK_ID}_*.png`
-   - [ ] Checked console for errors
-   - [ ] Logged the screenshot filename in your response
-   
-   **If ANY checkbox is not complete, you CANNOT mark tests as passing.**
+   **📋 DETERMINE TASK TYPE FIRST:**
+   Look at the task title and description to categorize it:
+
+   **UI Tasks** (contains: "UI", "component", "page", "form", "button", "display", "layout", "style"):
+   → Use **BROWSER TESTING** (Playwright required)
+
+   **API Tasks** (contains: "API", "endpoint", "route", "middleware", "server", "REST", "GraphQL"):
+   → Use **API TESTING** (curl/fetch verification)
+
+   **Config Tasks** (contains: "config", "setup", "TypeScript", "build", "package", "dependencies"):
+   → Use **BUILD VERIFICATION** (compile/lint checks)
+
+   **Database Tasks** (contains: "database", "schema", "table", "migration", "model", "query"):
+   → Use **DATABASE TESTING** (SQL queries)
+
+   **Integration Tasks** (contains: "workflow", "end-to-end", "user journey", "full stack"):
+   → Use **FULL E2E TESTING** (Complete browser workflow)
+
+   **⚠️ VERIFICATION CHECKPOINT - CHOOSE YOUR PATH:**
+
+   ### Option A: UI TASKS → Browser WORKFLOW Testing (Playwright with Interactions)
+
+   **🚨 CRITICAL: UI verification is NOT just taking a screenshot!**
+
+   **What proper UI verification requires:**
+   1. ✅ Console error monitoring (set up BEFORE navigation)
+   2. ✅ User interaction testing (clicks, form fills, hovers)
+   3. ✅ Result verification (elements appear, state changes)
+   4. ✅ Console error check (must be empty at end)
+   5. ✅ Screenshot (AFTER workflow is verified)
 
    ```javascript
-   // PLAYWRIGHT RUNS INSIDE DOCKER - No port forwarding needed!
-
-   // First, ensure Playwright is installed
+   // For UI components, pages, forms, visual elements
    mcp__task-manager__bash_docker({ command: "npm list playwright 2>/dev/null || npm install playwright" })
-
-   // Create screenshots directory for Web UI visibility
    mcp__task-manager__bash_docker({ command: "mkdir -p .playwright-mcp" })
 
-   // ✅ CORRECT: Create test script with Write tool (NOT heredoc!)
    Write({
-     file_path: "verify_task_NNN.cjs",  // Note: .cjs extension for CommonJS!
+     file_path: "verify_ui_task.cjs",
      content: `const { chromium } = require('playwright');
-
 (async () => {
   const browser = await chromium.launch({
     headless: true,
@@ -712,85 +1007,248 @@ For each task:
   });
   const page = await browser.newPage();
 
-  // Capture console errors
-  const errors = [];
+  // 🚨 STEP 1: Set up console error monitoring BEFORE any navigation
+  const consoleErrors = [];
+  const consoleWarnings = [];
   page.on('console', msg => {
-    if (msg.type() === 'error') errors.push(msg.text());
+    if (msg.type() === 'error') consoleErrors.push(msg.text());
+    if (msg.type() === 'warning') consoleWarnings.push(msg.text());
   });
+  page.on('pageerror', err => consoleErrors.push(err.message));
 
-  // Navigate to app (localhost works inside container!)
+  // 🚨 STEP 2: Navigate to the page
   await page.goto('http://localhost:5173');
 
-  // Take screenshot - MUST be in .playwright-mcp/ for Web UI
-  await page.screenshot({ path: '.playwright-mcp/task_NNN.png' });
+  // 🚨 STEP 3: TEST USER INTERACTIONS - This is what makes it a WORKFLOW test!
+  // Examples of interaction testing (adapt to your specific task):
 
-  // Test the specific feature (example: API endpoint)
-  const apiResponse = await page.evaluate(async () => {
-    const res = await fetch('/api/endpoint');
-    return await res.json();
-  });
+  // For a button task:
+  // await page.click('#my-button');
+  // await page.waitForSelector('#result', { timeout: 5000 });
 
-  // Output results
+  // For a form task:
+  // await page.fill('#email', 'test@example.com');
+  // await page.fill('#password', 'testpassword');
+  // await page.click('#submit');
+  // await page.waitForSelector('.success-message', { timeout: 5000 });
+
+  // For a navigation task:
+  // await page.click('a[href="/about"]');
+  // await page.waitForURL('**/about');
+  // const heading = await page.textContent('h1');
+  // if (!heading.includes('About')) throw new Error('Navigation failed');
+
+  // For a component display task:
+  // const element = await page.waitForSelector('.my-component', { timeout: 5000 });
+  // const isVisible = await element.isVisible();
+  // if (!isVisible) throw new Error('Component not visible');
+
+  // 🚨 STEP 4: Verify expected results
+  // Add assertions here based on what the task should accomplish
+
+  // 🚨 STEP 5: Check console errors (MANDATORY)
+  if (consoleErrors.length > 0) {
+    console.error('❌ Console errors detected:');
+    consoleErrors.forEach(err => console.error('  -', err));
+    await page.screenshot({ path: '.playwright-mcp/task_${TASK_ID}_ERROR.png' });
+    process.exit(1);
+  }
+
+  // 🚨 STEP 6: Take screenshot AFTER workflow is verified
+  await page.screenshot({ path: '.playwright-mcp/task_${TASK_ID}_verified.png' });
+
   console.log(JSON.stringify({
-    success: errors.length === 0,
-    title: await page.title(),
-    errors: errors,
-    apiResponse: apiResponse,
-    screenshot: '.playwright-mcp/task_NNN.png'
+    success: true,
+    consoleErrors: consoleErrors.length,
+    consoleWarnings: consoleWarnings.length,
+    screenshot: '.playwright-mcp/task_${TASK_ID}_verified.png',
+    message: '✅ UI workflow verified with interactions and no console errors'
   }, null, 2));
 
   await browser.close();
 })();`
    });
-
-   // Run the test script (file exists in container via volume mount)
-   mcp__task-manager__bash_docker({ command: "node verify_task_NNN.cjs" });
-
-   // Clean up test script
-   mcp__task-manager__bash_docker({ command: "rm -f verify_task_NNN.cjs" });
-
-   // Check the output for success/errors
+   mcp__task-manager__bash_docker({ command: "node verify_ui_task.cjs" });
    ```
 
-   **🔄 CONNECTION ERROR RETRY PROTOCOL (MANDATORY):**
-   
+   **❌ WRONG - This is NOT proper UI verification:**
+   ```javascript
+   // ❌ WRONG - Just loading page and taking screenshot
+   await page.goto('http://localhost:5173');
+   await page.screenshot({ path: 'done.png' });
+   // This proves NOTHING about whether the UI feature works!
+   ```
+
+   **✅ CORRECT - This IS proper UI verification:**
+   ```javascript
+   // ✅ CORRECT - Test the actual user workflow
+   page.on('console', msg => { if (msg.type() === 'error') errors.push(msg.text()); });
+   await page.goto('http://localhost:5173');
+   await page.click('#add-item-button');  // Test interaction
+   await page.fill('#item-name', 'Test Item');  // Test form
+   await page.click('#save');  // Test submission
+   await page.waitForSelector('.item-list .item:has-text("Test Item")');  // Verify result
+   if (errors.length > 0) throw new Error('Console errors: ' + errors.join(', '));
+   await page.screenshot({ path: '.playwright-mcp/task_123_add_item_workflow.png' });
+   ```
+
+   ### Option B: API TASKS → API Testing (curl/fetch)
+   ```javascript
+   // For backend endpoints, REST APIs, GraphQL, middleware
+   // NO BROWSER NEEDED - Test directly with curl
+
+   // Test health endpoint
+   mcp__task-manager__bash_docker({
+     command: "curl -s -w '\\nHTTP Status: %{http_code}\\n' http://localhost:3001/health",
+     description: "Test API health endpoint"
+   })
+
+   // Test API responses
+   mcp__task-manager__bash_docker({
+     command: `curl -s http://localhost:3001/api/endpoint | python3 -m json.tool`,
+     description: "Verify API JSON response"
+   })
+
+   // Check response headers
+   mcp__task-manager__bash_docker({
+     command: "curl -sI http://localhost:3001/api/endpoint | grep -E 'Content-Type|X-Request-ID'",
+     description: "Verify API headers"
+   })
+
+   // Test error handling
+   mcp__task-manager__bash_docker({
+     command: "curl -s -o /dev/null -w '%{http_code}' http://localhost:3001/api/invalid",
+     description: "Verify 404 handling"
+   })
+   ```
+
+   ### Option C: CONFIG TASKS → Build Verification
+   ```javascript
+   // For TypeScript config, build setup, dependencies, tooling
+   // NO BROWSER NEEDED - Verify compilation and configuration
+
+   // Check TypeScript compilation
+   mcp__task-manager__bash_docker({
+     command: "cd server && npx tsc --noEmit",
+     description: "Verify TypeScript compiles without errors"
+   })
+
+   // Verify package.json setup
+   mcp__task-manager__bash_docker({
+     command: "node -e \"const pkg = require('./package.json'); console.log('Type:', pkg.type, 'Scripts:', Object.keys(pkg.scripts))\"",
+     description: "Check package.json configuration"
+   })
+
+   // Test build process
+   mcp__task-manager__bash_docker({
+     command: "npm run build 2>&1 | tail -5",
+     description: "Verify build completes successfully"
+   })
+   ```
+
+   ### Option D: DATABASE TASKS → Database Testing
+   ```javascript
+   // For schema creation, migrations, models, queries
+   // NO BROWSER NEEDED - Test with SQL queries
+
+   // Verify tables exist
+   mcp__task-manager__bash_docker({
+     command: "psql $DATABASE_URL -c '\\dt' 2>/dev/null || echo 'Database not configured yet'",
+     description: "List database tables"
+   })
+
+   // Check schema
+   mcp__task-manager__bash_docker({
+     command: "psql $DATABASE_URL -c '\\d+ users' 2>/dev/null || echo 'Users table not created yet'",
+     description: "Verify users table schema"
+   })
+
+   // Test queries
+   mcp__task-manager__bash_docker({
+     command: "psql $DATABASE_URL -c 'SELECT COUNT(*) FROM users' 2>/dev/null || echo 'Query test skipped'",
+     description: "Test basic query execution"
+   })
+   ```
+
+   ### Option E: INTEGRATION TASKS → Full E2E Testing
+   ```javascript
+   // For complete workflows, multi-step user journeys
+   // FULL BROWSER TESTING with multiple interactions
+
+   Write({
+     file_path: "verify_e2e_task.cjs",
+     content: `const { chromium } = require('playwright');
+(async () => {
+  const browser = await chromium.launch({
+    headless: true,
+    args: ['--no-sandbox', '--disable-setuid-sandbox']
+  });
+  const page = await browser.newPage();
+
+  // Complete workflow test
+  await page.goto('http://localhost:5173');
+
+  // Step 1: Login
+  await page.fill('#email', 'test@example.com');
+  await page.fill('#password', 'testpass');
+  await page.click('#login-btn');
+  await page.waitForSelector('#dashboard');
+  await page.screenshot({ path: '.playwright-mcp/task_${TASK_ID}_step1_login.png' });
+
+  // Step 2: Create item
+  await page.click('#create-new');
+  await page.fill('#title', 'Test Item');
+  await page.click('#save');
+  await page.waitForSelector('.success-message');
+  await page.screenshot({ path: '.playwright-mcp/task_${TASK_ID}_step2_create.png' });
+
+  // Step 3: Verify in list
+  const items = await page.$$eval('.item-title', els => els.map(el => el.textContent));
+  console.log('Created items:', items);
+  await page.screenshot({ path: '.playwright-mcp/task_${TASK_ID}_step3_list.png' });
+
+  await browser.close();
+})();`
+   });
+   mcp__task-manager__bash_docker({ command: "node verify_e2e_task.cjs" });
+   ```
+
+   **🔄 CONNECTION ERROR RECOVERY (FOLLOWS TWO-ATTEMPT RULE):**
+
    If you get `ERR_CONNECTION_REFUSED`, `ERR_CONNECTION_RESET`, or `ERR_EMPTY_RESPONSE`:
-   
+
    ```
-   ATTEMPT 1 FAILED → Do NOT skip verification!
-   
-   1. Check server status:
+   ATTEMPT 1 FAILED → Try once more
+
+   1. Check server status and logs:
       bash_docker({ command: "curl -s http://localhost:5173 > /dev/null && echo 'UP' || echo 'DOWN'" })
-      bash_docker({ command: "curl -s http://localhost:3001/health" })
-   
+      bash_docker({ command: "tail -20 server.log 2>/dev/null || echo 'No server log'" })
+
    2. If DOWN, restart servers:
       bash_docker({ command: "./init.sh" })
-      bash_docker({ command: "for i in {1..20}; do curl -s http://localhost:5173 > /dev/null 2>&1 && echo 'Ready' && break; sleep 1; done" })
-   
+      bash_docker({ command: "for i in {1..15}; do curl -s http://localhost:5173 > /dev/null 2>&1 && echo 'Ready' && break; sleep 1; done" })
+
    3. ATTEMPT 2: Retry verification
-      [Run Playwright test again]
-   
-   ATTEMPT 2 FAILED → Still do NOT skip!
-   
-   4. Extended wait and server check:
-      bash_docker({ command: "sleep 10" })
-      bash_docker({ command: "ps aux | grep -E 'node|vite'" })
-      bash_docker({ command: "lsof -i :5173 -i :3001" })
-   
-   5. If processes not running, restart with verbose logging:
-      bash_docker({ command: "(cd server && node index.js &) && npm run dev -- --host 2>&1 | head -20" })
-   
-   6. ATTEMPT 3: Final retry
-[Run Playwright test again]
-   
-   ATTEMPT 3 FAILED → NOW you may escalate:
-   
-   7. Document the blocker in claude-progress.md:
-      "BLOCKER: Browser verification failed after 3 attempts. Server status: [X]. Error: [Y]"
-   
-   8. Do NOT mark tests as passing
-   9. Do NOT mark task as complete
-   10. Stop session and let next session investigate
+      [Run test again]
+
+   ATTEMPT 2 FAILED → STOP! Read logs before any third attempt
+
+   4. MANDATORY: Read server and web logs:
+      bash_docker({ command: "tail -100 server.log" })
+      bash_docker({ command: "tail -100 web.log" })
+
+   5. Diagnose the root cause from logs
+
+   6. Fix the specific issue found
+
+   7. Only then: ATTEMPT 3 (final)
+
+   ATTEMPT 3 FAILED → Document as BLOCKER:
+
+   8. Update claude-progress.md with BLOCKER section (see format above)
+   9. Do NOT mark tests as passing
+   10. Do NOT mark task as complete
+   11. Skip to next task or end session
    ```
    
    **❌ NEVER DO THIS:**
@@ -803,14 +1261,31 @@ For each task:
    update_task_status({ task_id: 1547, done: true })  // VIOLATION!
    ```
 
-5. **Mark tests passing (ONLY after successful verification with screenshot):**
-   
-   **⛔ STOP! Before calling `update_test_result`, confirm:**
-   - Did you successfully run Playwright and see the page load? (Y/N)
-   - Did you save a screenshot to `.playwright-mcp/task_{ID}_*.png`? (Y/N)
-   - Did you check console errors? (Y/N)
-   
-   **If ANY answer is "N", go back to step 4. Do NOT proceed.**
+5. **Mark tests passing (ONLY after appropriate verification for task type):**
+
+   **⛔ STOP! Before calling `update_test_result`, confirm based on task type:**
+
+   **UI Tasks:**
+   - ✅ Did you run Playwright and capture screenshots? (Y/N)
+   - ✅ Did you check for console errors? (Y/N)
+
+   **API Tasks:**
+   - ✅ Did you verify endpoints with curl? (Y/N)
+   - ✅ Did you check response codes and JSON structure? (Y/N)
+
+   **Config Tasks:**
+   - ✅ Did compilation/build succeed without errors? (Y/N)
+   - ✅ Are dependencies correctly installed? (Y/N)
+
+   **Database Tasks:**
+   - ✅ Did schema creation succeed? (Y/N)
+   - ✅ Can you query the tables successfully? (Y/N)
+
+   **Integration Tasks:**
+   - ✅ Did you complete the full E2E workflow? (Y/N)
+   - ✅ Did you capture screenshots at each step? (Y/N)
+
+   **If ANY answer is "N" for your task type, go back to step 4. Do NOT proceed.**
    
    ```javascript
    // CRITICAL: You MUST have completed step 4 verification before this!
@@ -981,9 +1456,9 @@ Session complete. Agent will auto-continue to next session if configured.
 
 ---
 
-## BROWSER VERIFICATION REFERENCE
+## VERIFICATION REFERENCE BY TASK TYPE
 
-**Must verify EVERY task through browser. No backend-only exceptions.**
+**Use appropriate verification for each task type. Browser testing ONLY for UI/Integration tasks.**
 
 **IMPORTANT: Playwright runs INSIDE Docker container - no external MCP tools!**
 
@@ -1118,7 +1593,11 @@ node /tmp/form_test.js`
 mcp__task-manager__bash_docker({ command: "rm -f /tmp/form_test.js" })
 ```
 
-**Why mandatory:** Backend changes can break frontend. Console errors only visible in browser. Users experience app through browser, not curl.
+**Why task-specific testing matters:**
+- UI changes need visual verification that curl can't provide
+- API changes need response validation that screenshots can't test
+- Config changes need build verification, not browser testing
+- Using the right test type saves 30-40% session time while catching relevant issues
 
 ---
 
@@ -1214,12 +1693,14 @@ mcp__task-manager__bash_docker({ command: "rm -f /tmp/form_test.js" })
 ## REMEMBER
 
 **Quality Enforcement:**
-- ✅ Browser verification for EVERY task - **NO EXCEPTIONS**
+- ✅ **Appropriate verification for EVERY task based on type**
 - ✅ **All tests MUST pass before marking task complete** (database enforced!)
 - ✅ Call `update_test_result` for EVERY test (no skipping!)
-- ✅ **NEVER mark test as passing without screenshot proof**
-- ✅ Console must be error-free
-- ✅ Screenshots document verification
+- ✅ **UI tasks:** Browser screenshots required
+- ✅ **API tasks:** Response validation required
+- ✅ **Config tasks:** Build success required
+- ✅ **Database tasks:** Query verification required
+- ✅ **Integration tasks:** Full E2E workflow required
 - ✅ **Connection errors require 3 retry attempts before stopping**
 
 **Efficiency:**

@@ -45,9 +45,47 @@ This document tracks enhancements and features planned for **after** the initial
 **Priority:** MEDIUM (implement based on user feedback)
 **Estimated Effort:** 16-23 hours
 
+### 3. Intervention System - Database Implementation
+**Status:** 🚧 UI Complete, Database Integration Pending
+
+**What's Implemented:**
+- ✅ Phase 1: Prompt improvements (retry limits, diagnostic requirements)
+- ✅ Phase 2: Automated detection (retry tracking, blocker detection)
+- ✅ Phase 3: UI and API infrastructure
+  - Full web UI dashboard at `/interventions`
+  - API endpoints for active/history/resume
+  - Multi-channel notification service (webhook, email, SMS)
+  - Pause/resume session manager
+  - Auto-recovery manager
+
+**What Needs Implementation:**
+1. **Database Schema Creation**
+   - Apply `schema/postgresql/011_paused_sessions.sql` migration
+   - Create tables: `paused_sessions`, `intervention_actions`, `notification_preferences`
+   - Create views: `v_active_interventions`, `v_intervention_history`
+
+2. **Database Integration Options:**
+   - **Option A**: Extend `TaskDatabase` abstraction with intervention methods
+   - **Option B**: Use raw asyncpg connections in `PausedSessionManager`
+   - **Option C**: Create separate `InterventionDatabase` class
+
+3. **Required Methods:**
+   - `pause_session()` - Save session state to database
+   - `resume_session()` - Retrieve and mark resolved
+   - `get_active_pauses()` - Query active interventions
+   - `get_intervention_history()` - Query resolved interventions
+   - `log_intervention_action()` - Audit trail
+
+**Current Workaround:**
+All database operations in `core/session_manager.py` are stubbed to return empty results or mock data, allowing the UI to function without errors.
+
+**Priority:** HIGH - Core safety feature
+**Estimated Effort:** 8-12 hours
+**Documentation:** See [docs/intervention-system-phase3.md](docs/intervention-system-phase3.md)
+
 ---
 
-### 3. Spec File Generator - Companion Tool
+### 4. Spec File Generator - Companion Tool
 **Status:** Concept phase - Standalone project
 
 **Vision:** Interactive wizard that helps users create comprehensive specification files optimized for YokeFlow.

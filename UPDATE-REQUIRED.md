@@ -1,48 +1,75 @@
-# Database Updates Required (v1.1.0 → v1.1.1)
+# Database Updates Required (v1.3.0 → v1.4.0)
 
 ⚠️ **Action Required for Existing Installations**
 
-If you're upgrading from v1.1.0, you need to apply database schema updates.
+If you're upgrading from v1.3.0 or earlier, you need to apply database schema updates for the production hardening features.
 
 ## Quick Update (Recommended)
 
-Run this single command to apply all schema updates:
+Run these commands to apply all schema updates in order:
 
 **Via Docker:**
 ```bash
-docker exec -i yokeflow_postgres psql -U agent -d yokeflow < schema/postgresql/add_metadata_to_prompt_proposals.sql
-docker exec -i yokeflow_postgres psql -U agent -d yokeflow < schema/postgresql/cleanup_session_quality_checks.sql
+# Apply intervention system tables (v1.4.0)
+docker exec -i yokeflow_postgres psql -U agent -d yokeflow < schema/postgresql/011_paused_sessions.sql
+
+# Apply session checkpointing tables (v1.4.0)
+docker exec -i yokeflow_postgres psql -U agent -d yokeflow < schema/postgresql/012_session_checkpoints.sql
 ```
 
 **Direct PostgreSQL:**
 ```bash
-psql -U agent -d yokeflow < schema/postgresql/add_metadata_to_prompt_proposals.sql
-psql -U agent -d yokeflow < schema/postgresql/cleanup_session_quality_checks.sql
+# Apply intervention system tables (v1.4.0)
+psql -U agent -d yokeflow < schema/postgresql/011_paused_sessions.sql
+
+# Apply session checkpointing tables (v1.4.0)
+psql -U agent -d yokeflow < schema/postgresql/012_session_checkpoints.sql
 ```
 
 ## What's Changed?
 
-### 1. Session Quality Checks Cleanup
-**File:** `schema/postgresql/cleanup_session_quality_checks.sql`
+### 1. Intervention System (P0 Critical)
+**File:** `schema/postgresql/011_paused_sessions.sql`
 
-**Changes:**
-- Removed redundant `check_type` column (always 'quick')
-- Removed `review_text`, `review_summary`, `prompt_improvements` columns (moved to `session_deep_reviews` table)
-- Updated 3 database views to remove `check_type` filter
+**New Tables:**
+- `paused_sessions` - Tracks paused sessions with reasons and metadata
+- `intervention_actions` - Audit trail of intervention actions
+- `notification_preferences` - User notification settings for interventions
 
-**Impact if not applied:**
-- ❌ Session quality checks won't be saved to database
-- ❌ Quality dashboard won't show data
+**New Views:**
+- `v_active_interventions` - Shows currently paused sessions
+- `v_intervention_history` - Complete intervention audit trail
 
-### 2. Prompt Proposals Metadata Column
-**File:** `schema/postgresql/add_metadata_to_prompt_proposals.sql`
-
-**Changes:**
-- Added `metadata JSONB` column to `prompt_proposals` table
+**New Functions:**
+- `pause_session()` - Pause a session with reason
+- `resume_session()` - Resume a paused session
 
 **Impact if not applied:**
-- ❌ Prompt improvement analysis will fail
-- ✅ All other features work normally
+- ❌ Intervention system won't work
+- ❌ Sessions can't be paused/resumed
+- ❌ No audit trail for interventions
+
+### 2. Session Checkpointing (P0 Critical)
+**File:** `schema/postgresql/012_session_checkpoints.sql`
+
+**New Tables:**
+- `session_checkpoints` - Stores complete session state at key points
+- `checkpoint_recoveries` - Tracks recovery attempts from checkpoints
+
+**New Views:**
+- `v_latest_checkpoints` - Most recent checkpoint per session
+- `v_resumable_checkpoints` - Valid checkpoints for recovery
+- `v_checkpoint_recovery_history` - Recovery attempt history
+
+**New Functions:**
+- `create_checkpoint()` - Create a new checkpoint
+- `start_checkpoint_recovery()` - Begin recovery from checkpoint
+- `complete_checkpoint_recovery()` - Mark recovery as successful
+
+**Impact if not applied:**
+- ❌ No session checkpointing capability
+- ❌ Can't resume from failures
+- ❌ No session state preservation
 
 ## Verification
 

@@ -367,7 +367,3 @@ mcp__task-manager__update_task_status(task_id=42, completed=True)
 - [Main README](../README.md) - Platform overview
 - [CLAUDE.md](../CLAUDE.md) - Developer guide
 - [Database Schema](../schema/postgresql/001_initial_schema.sql) - Full schema
-
-## License
-
-Same as parent project.

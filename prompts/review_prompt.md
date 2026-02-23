@@ -16,11 +16,27 @@ You are analyzing a completed YokeFlow coding session to:
 
 Rate based on:
 
-**Browser Verification (CRITICAL: r=0.98 correlation)**
-- 50+ calls = Excellent (9-10)
-- 10-49 calls = Good (7-8)
-- 1-9 calls = Poor (4-6)
-- 0 calls = Critical (1-3)
+**Task-Appropriate Verification (CRITICAL: Must match task type)**
+
+First, analyze what types of tasks were worked on:
+- **UI Tasks** (components, pages, forms, layouts) → Browser testing REQUIRED
+- **API Tasks** (endpoints, routes, middleware) → curl/fetch testing sufficient
+- **Config Tasks** (TypeScript, build, dependencies) → Build verification sufficient
+- **Database Tasks** (schemas, migrations) → SQL query testing sufficient
+- **Integration Tasks** (workflows, E2E) → Browser testing REQUIRED
+
+Then evaluate verification appropriateness:
+- **UI/Integration Tasks:**
+  - 50+ Playwright calls = Excellent (9-10)
+  - 10-49 calls = Good (7-8)
+  - 1-9 calls = Poor (4-6)
+  - 0 calls = Critical (1-3)
+
+- **API/Config/Database Tasks:**
+  - Appropriate non-browser testing = Excellent (9-10)
+  - Some testing done = Good (7-8)
+  - Minimal testing = Poor (4-6)
+  - No testing at all = Critical (1-3)
 
 **Error Rate**
 - <2% = Excellent
@@ -29,8 +45,8 @@ Rate based on:
 - >10% = Critical
 
 **Task Completion Quality**
-- Verified vs. unverified tests
-- Tests marked passing before/after browser verification
+- Verified vs. unverified tests (using appropriate method)
+- Tests marked passing after appropriate verification
 - Implementation matches task descriptions
 
 **Prompt Adherence**
@@ -39,27 +55,43 @@ Rate based on:
 - MCP tool usage patterns
 - Git commit practices
 
-### 2. Browser Verification Analysis
+### 2. Verification Analysis (Task-Appropriate)
 
-**Most Important Quality Indicator**
+**Most Important Quality Indicator: RIGHT TEST FOR RIGHT TASK**
 
-Analyze Playwright usage patterns:
+First, identify task types completed in this session:
+- List each task ID and categorize as: UI, API, Config, Database, or Integration
+- Note which verification method was used for each
+
+**For UI/Integration Tasks - Browser Verification Required:**
 - How many Playwright calls total?
 - Screenshots before/after changes?
 - User interactions tested (clicks, forms, navigation)?
-- Verification BEFORE marking tests passing?
+- Console error checking implemented?
 - Pattern: Navigate → Screenshot → Interact → Verify
 
+**For API Tasks - curl/fetch Testing:**
+- Endpoints tested with appropriate HTTP methods?
+- Response codes verified?
+- JSON structure validated?
+- Error cases tested?
+
+**For Config/Database Tasks - Build/Query Testing:**
+- Compilation/build verified?
+- Schema creation confirmed?
+- Query execution tested?
+
 **Quality Patterns:**
-- **Excellent (9-10):** 50+ calls, multiple screenshots per task, full workflow testing
-- **Good (7-8):** 10-49 calls, some screenshots, basic interaction testing
-- **Poor (4-6):** 1-9 calls, minimal verification
-- **Critical (1-3):** 0 calls, no browser testing at all
+- **Excellent (9-10):** Appropriate testing method with thorough coverage
+- **Good (7-8):** Correct testing approach with basic coverage
+- **Poor (4-6):** Wrong testing method OR minimal coverage
+- **Critical (1-3):** No testing OR completely inappropriate method
 
 **Red Flags:**
-- Tests marked passing without browser verification
-- Playwright errors ignored or not recovered from
-- Rationalizations: "manual testing sufficient", "browser automation has limitations"
+- UI tasks without browser testing
+- Config tasks with unnecessary browser testing (wastes time)
+- Tests marked passing without ANY verification
+- Rationalizations about testing being unnecessary
 
 ### 3. Error Pattern Analysis
 
@@ -122,22 +154,39 @@ For each issue, provide:
 [Detailed breakdown with evidence from metrics]
 
 ### Rating Breakdown
-- Browser verification: X/5 (Y Playwright calls)
+- Task-appropriate verification: X/5 (UI tasks: Y Playwright calls, API tasks: Z curl tests, etc.)
 - Error handling: X/5 (Z% error rate)
-- Task completion: X/5 (tests verified: Yes/No)
+- Task completion: X/5 (tests verified with appropriate method: Yes/No)
 - Prompt adherence: X/5
 
-## 2. Browser Verification Analysis
+## 2. Verification Analysis (Task-Appropriate)
 
-**Playwright Usage: X calls - [EXCELLENT/GOOD/POOR/NONE]**
+**Task Types in Session:**
+- UI Tasks: [List task IDs] - Required browser testing
+- API Tasks: [List task IDs] - Required curl/fetch testing
+- Config Tasks: [List task IDs] - Required build verification
+- Database Tasks: [List task IDs] - Required query testing
+- Integration Tasks: [List task IDs] - Required E2E browser testing
 
-[Detailed analysis with specific examples from session data]
+**Verification Method Used:**
+- Browser/Playwright: X calls - [Appropriate for UI tasks: Yes/No]
+- curl/fetch: Y calls - [Appropriate for API tasks: Yes/No]
+- Build verification: Z occurrences - [Appropriate for config tasks: Yes/No]
 
-**Patterns Observed:**
-- Navigate → Screenshot → Interact workflow: [Yes/No]
-- Screenshots per task: X average
-- Console error checking: [Yes/No]
-- Verification before marking tests passing: [Yes/No]
+**Quality Assessment: [EXCELLENT/GOOD/POOR/CRITICAL]**
+
+[Detailed analysis of whether right testing approach was used for each task type]
+
+**For UI/Integration Tasks (if any):**
+- Navigate → Screenshot → Interact workflow: [Yes/No/N/A]
+- Screenshots per UI task: X average
+- Console error checking: [Yes/No/N/A]
+- User interaction testing: [Yes/No/N/A]
+
+**For Non-UI Tasks (if any):**
+- Appropriate verification method chosen: [Yes/No]
+- Time saved by avoiding browser testing: [Estimate]
+- Coverage adequate for task type: [Yes/No]
 
 ## 3. Error Pattern Analysis
 

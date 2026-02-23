@@ -11,15 +11,21 @@
     "clean": "rm -rf .next"
   },
   "dependencies": {
-    "axios": "^1.13.5",
+    "@radix-ui/react-dialog": "^1.1.15",
+    "@radix-ui/react-label": "^2.1.8",
+    "@radix-ui/react-slot": "^1.2.4",
+    "@radix-ui/react-tabs": "^1.1.13",
+    "axios": "^1.13.2",
+    "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "date-fns": "^4.1.0",
     "lucide-react": "^0.559.0",
-    "next": "^16.1.5",
+    "next": "^16.1.1",
     "react": "19.2.1",
     "react-dom": "19.2.1",
     "sonner": "^2.0.7",
-    "tailwind-merge": "^3.4.0"
+    "tailwind-merge": "^3.4.0",
+    "tailwindcss-animate": "^1.0.7"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
@@ -29,8 +35,5 @@
     "autoprefixer": "^10.4.22",
     "tailwindcss": "^4",
     "typescript": "^5"
-  },
-  "overrides": {
-    "qs": "^6.14.1"
   }
 }

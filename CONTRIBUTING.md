@@ -336,10 +336,6 @@ Contributors will be:
 - Acknowledged in documentation
 - Invited to collaborate on future features
 
-## License
-
-By contributing to YokeFlow, you agree that your contributions will be licensed under the YokeFlow Community License (YCL) v1.0. See [LICENSE](LICENSE) for details.
-
 ---
 
 **Questions?** Open a discussion on GitHub or create an issue.

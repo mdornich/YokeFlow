@@ -14,6 +14,7 @@ import { ScreenshotsGallery } from '@/components/ScreenshotsGallery';
 import { ResetProjectDialog } from '@/components/ResetProjectDialog';
 import { ProjectDetailsPanel } from '@/components/ProjectDetailsPanel';
 import ConfirmDialog from '@/components/ConfirmDialog';
+import InterventionDashboard from '@/components/InterventionDashboard';
 import { useProjectWebSocket } from '@/lib/websocket';
 import { api } from '@/lib/api';
 import { truncate } from '@/lib/utils';
@@ -32,7 +33,7 @@ export default function ProjectDetailPage() {
   const [isInitializing, setIsInitializing] = useState(false);
   const [isStartingCoding, setIsStartingCoding] = useState(false);
   const [isCancelling, setIsCancelling] = useState(false);
-  const [activeTab, setActiveTab] = useState<'current' | 'history' | 'quality' | 'logs' | 'screenshots'>('current');
+  const [activeTab, setActiveTab] = useState<'current' | 'history' | 'quality' | 'logs' | 'screenshots' | 'interventions'>('current');
   const [isStopping, setIsStopping] = useState(false);
   const [isStoppingAfterCurrent, setIsStoppingAfterCurrent] = useState(false);
   const [isRefreshingSessions, setIsRefreshingSessions] = useState(false);
@@ -723,6 +724,17 @@ export default function ProjectDetailPage() {
               Screenshots
               <span className="ml-2 text-sm">📸</span>
             </button>
+            <button
+              onClick={() => setActiveTab('interventions')}
+              className={`flex-1 px-6 py-4 font-medium transition-colors ${
+                activeTab === 'interventions'
+                  ? 'text-blue-400 border-b-2 border-blue-400 bg-gray-800/50'
+                  : 'text-gray-400 hover:text-white hover:bg-gray-800/30'
+              }`}
+            >
+              Interventions
+              <span className="ml-2 text-sm">🚨</span>
+            </button>
           </div>
 
           {/* Tab Content */}
@@ -764,6 +776,10 @@ export default function ProjectDetailPage() {
 
             {activeTab === 'screenshots' && (
               <ScreenshotsGallery projectId={projectId} />
+            )}
+
+            {activeTab === 'interventions' && (
+              <InterventionDashboard projectId={projectId} />
             )}
           </div>
         </div>

@@ -17,11 +17,18 @@ from datetime import datetime
 from contextlib import asynccontextmanager
 from uuid import UUID, uuid4
 import hashlib
-import logging
 
 from core.config import Config
+from core.database_retry import with_retry, RetryConfig
+from core.structured_logging import get_logger, PerformanceLogger
+from core.errors import (
+    DatabaseConnectionError,
+    DatabaseQueryError,
+    DatabaseTransactionError,
+    DatabasePoolExhaustedError
+)
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class TaskDatabase:
@@ -43,13 +50,20 @@ class TaskDatabase:
         self.connection_url = connection_url
         self.pool: Optional[asyncpg.Pool] = None
 
+    @with_retry(RetryConfig(max_retries=5, base_delay=2.0, max_delay=60.0))
     async def connect(self, min_size: int = 10, max_size: int = 20):
         """
-        Create connection pool to PostgreSQL.
+        Create connection pool to PostgreSQL with retry logic.
+
+        Uses exponential backoff to handle transient connection failures.
+        Will retry up to 5 times with delays up to 60 seconds.
 
         Args:
             min_size: Minimum number of connections in pool
             max_size: Maximum number of connections in pool
+
+        Raises:
+            asyncpg.PostgresError: If connection fails after all retries
         """
         self.pool = await asyncpg.create_pool(
             self.connection_url,
@@ -67,16 +81,38 @@ class TaskDatabase:
 
     @asynccontextmanager
     async def acquire(self):
-        """Acquire a connection from the pool."""
-        async with self.pool.acquire() as conn:
+        """
+        Acquire a connection from the pool with retry logic.
+
+        Automatically retries on transient connection failures.
+        """
+        @with_retry(RetryConfig(max_retries=3, base_delay=1.0))
+        async def _acquire_with_retry():
+            return await self.pool.acquire()
+
+        conn = await _acquire_with_retry()
+        try:
             yield conn
+        finally:
+            await self.pool.release(conn)
 
     @asynccontextmanager
     async def transaction(self):
-        """Create a transaction context."""
-        async with self.pool.acquire() as conn:
+        """
+        Create a transaction context with retry logic.
+
+        Automatically retries on transient transaction failures.
+        """
+        @with_retry(RetryConfig(max_retries=3, base_delay=1.0))
+        async def _acquire_with_retry():
+            return await self.pool.acquire()
+
+        conn = await _acquire_with_retry()
+        try:
             async with conn.transaction():
                 yield conn
+        finally:
+            await self.pool.release(conn)
 
     # =========================================================================
     # Project Operations
@@ -910,43 +946,44 @@ class TaskDatabase:
         Returns:
             Next task with epic info and tests, or None
         """
-        async with self.acquire() as conn:
-            # Get the next task
-            task_row = await conn.fetchrow(
-                """
-                SELECT
-                    t.*,
-                    e.name as epic_name,
-                    e.description as epic_description
-                FROM tasks t
-                JOIN epics e ON t.epic_id = e.id
-                WHERE t.project_id = $1
-                    AND t.done = false
-                    AND e.status != 'completed'
-                ORDER BY e.priority, t.priority, t.id
-                LIMIT 1
-                """,
-                project_id
-            )
+        with PerformanceLogger("get_next_task", {"project_id": str(project_id)}):
+            async with self.acquire() as conn:
+                # Get the next task
+                task_row = await conn.fetchrow(
+                    """
+                    SELECT
+                        t.*,
+                        e.name as epic_name,
+                        e.description as epic_description
+                    FROM tasks t
+                    JOIN epics e ON t.epic_id = e.id
+                    WHERE t.project_id = $1
+                        AND t.done = false
+                        AND e.status != 'completed'
+                    ORDER BY e.priority, t.priority, t.id
+                    LIMIT 1
+                    """,
+                    project_id
+                )
 
-            if not task_row:
-                return None
+                if not task_row:
+                    return None
 
-            task = dict(task_row)
+                task = dict(task_row)
 
-            # Get tests for this task
-            test_rows = await conn.fetch(
-                """
-                SELECT * FROM tests
-                WHERE task_id = $1
-                ORDER BY id
-                """,
-                task['id']
-            )
+                # Get tests for this task
+                test_rows = await conn.fetch(
+                    """
+                    SELECT * FROM tests
+                    WHERE task_id = $1
+                    ORDER BY id
+                    """,
+                    task['id']
+                )
 
-            task['tests'] = [dict(row) for row in test_rows]
+                task['tests'] = [dict(row) for row in test_rows]
 
-            return task
+                return task
 
     async def update_task_status(
         self,
@@ -1981,6 +2018,599 @@ class TaskDatabase:
             }
             result['unreviewed_session_numbers'] = [row['session_number'] for row in unreviewed]
             return result
+
+    # =========================================================================
+    # Paused Sessions and Intervention Operations
+    # =========================================================================
+
+    @with_retry(RetryConfig(max_retries=3, base_delay=1.0))
+    async def pause_session(
+        self,
+        session_id: UUID,
+        project_id: UUID,
+        reason: str,
+        pause_type: str,
+        blocker_info: Optional[Dict[str, Any]] = None,
+        retry_stats: Optional[Dict[str, Any]] = None,
+        current_task_id: Optional[int] = None,
+        current_task_description: Optional[str] = None,
+        message_count: Optional[int] = None,
+        error_messages: Optional[List[str]] = None
+    ) -> UUID:
+        """
+        Pause a session and save its state to database.
+
+        Uses the pause_session() SQL function for atomic operation.
+
+        Args:
+            session_id: Session UUID to pause
+            project_id: Project UUID
+            reason: Reason for pausing
+            pause_type: Type of pause (retry_limit, critical_error, manual, timeout)
+            blocker_info: Information about the blocker
+            retry_stats: Retry statistics
+            current_task_id: Current task ID
+            current_task_description: Current task description
+            message_count: Number of messages in session
+            error_messages: List of error messages
+
+        Returns:
+            UUID of the paused session record
+        """
+        async with self.acquire() as conn:
+            paused_session_id = await conn.fetchval(
+                """
+                SELECT pause_session(
+                    $1::UUID, $2::UUID, $3, $4,
+                    $5::jsonb, $6::jsonb, $7, $8
+                )
+                """,
+                session_id,
+                project_id,
+                reason,
+                pause_type,
+                json.dumps(blocker_info or {}),
+                json.dumps(retry_stats or {}),
+                current_task_id,
+                current_task_description
+            )
+
+            # Update additional fields not in the SQL function
+            if message_count is not None or error_messages is not None:
+                update_parts = []
+                params = []
+                param_idx = 2
+
+                if message_count is not None:
+                    update_parts.append(f"message_count = ${param_idx}")
+                    params.append(message_count)
+                    param_idx += 1
+
+                if error_messages is not None:
+                    update_parts.append(f"error_messages = ${param_idx}")
+                    params.append(error_messages)
+                    param_idx += 1
+
+                if update_parts:
+                    query = f"""
+                        UPDATE paused_sessions
+                        SET {', '.join(update_parts)}
+                        WHERE id = $1
+                    """
+                    await conn.execute(query, paused_session_id, *params)
+
+            return paused_session_id
+
+    @with_retry(RetryConfig(max_retries=3, base_delay=1.0))
+    async def resume_session(
+        self,
+        paused_session_id: UUID,
+        resolved_by: str = "system",
+        resolution_notes: Optional[str] = None
+    ) -> bool:
+        """
+        Resume a paused session.
+
+        Uses the resume_session() SQL function for atomic operation.
+
+        Args:
+            paused_session_id: Paused session UUID
+            resolved_by: Who resolved the issue
+            resolution_notes: Notes about the resolution
+
+        Returns:
+            True if session was successfully resumed
+        """
+        async with self.acquire() as conn:
+            success = await conn.fetchval(
+                "SELECT resume_session($1::UUID, $2, $3)",
+                paused_session_id,
+                resolved_by,
+                resolution_notes
+            )
+            return success
+
+    async def get_paused_session(self, paused_session_id: UUID) -> Optional[Dict[str, Any]]:
+        """
+        Get a paused session by ID.
+
+        Args:
+            paused_session_id: Paused session UUID
+
+        Returns:
+            Paused session record or None
+        """
+        async with self.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT * FROM paused_sessions WHERE id = $1",
+                paused_session_id
+            )
+            return dict(row) if row else None
+
+    async def get_active_pauses(
+        self,
+        project_id: Optional[UUID] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Get all active (unresolved) paused sessions.
+
+        Args:
+            project_id: Optional project UUID to filter by
+
+        Returns:
+            List of active paused sessions with project info
+        """
+        async with self.acquire() as conn:
+            if project_id:
+                rows = await conn.fetch(
+                    "SELECT * FROM v_active_interventions WHERE project_id = $1",
+                    project_id
+                )
+            else:
+                rows = await conn.fetch("SELECT * FROM v_active_interventions")
+
+            return [dict(row) for row in rows]
+
+    async def get_intervention_history(
+        self,
+        project_id: Optional[UUID] = None,
+        limit: int = 50
+    ) -> List[Dict[str, Any]]:
+        """
+        Get history of resolved interventions.
+
+        Args:
+            project_id: Optional project UUID to filter by
+            limit: Maximum number of records to return
+
+        Returns:
+            List of resolved interventions
+        """
+        async with self.acquire() as conn:
+            if project_id:
+                rows = await conn.fetch(
+                    """
+                    SELECT * FROM v_intervention_history
+                    WHERE project_id = $1
+                    ORDER BY resolved_at DESC
+                    LIMIT $2
+                    """,
+                    project_id, limit
+                )
+            else:
+                rows = await conn.fetch(
+                    """
+                    SELECT * FROM v_intervention_history
+                    ORDER BY resolved_at DESC
+                    LIMIT $1
+                    """,
+                    limit
+                )
+
+            return [dict(row) for row in rows]
+
+    async def log_intervention_action(
+        self,
+        paused_session_id: UUID,
+        action_type: str,
+        action_status: str,
+        action_details: Optional[Dict[str, Any]] = None,
+        result_message: Optional[str] = None,
+        error_message: Optional[str] = None
+    ) -> UUID:
+        """
+        Log an intervention action.
+
+        Args:
+            paused_session_id: Paused session UUID
+            action_type: Type of action (notification_sent, auto_recovery, manual_fix, resumed)
+            action_status: Status (pending, success, failed)
+            action_details: Additional details about the action
+            result_message: Result message
+            error_message: Error message if failed
+
+        Returns:
+            UUID of the action record
+        """
+        async with self.acquire() as conn:
+            action_id = await conn.fetchval(
+                """
+                INSERT INTO intervention_actions (
+                    paused_session_id,
+                    action_type,
+                    action_status,
+                    action_details,
+                    result_message,
+                    error_message,
+                    completed_at
+                )
+                VALUES ($1, $2, $3, $4, $5, $6,
+                    CASE WHEN $3 IN ('success', 'failed') THEN NOW() ELSE NULL END)
+                RETURNING id
+                """,
+                paused_session_id,
+                action_type,
+                action_status,
+                json.dumps(action_details or {}),
+                result_message,
+                error_message
+            )
+            return action_id
+
+    async def update_intervention_action(
+        self,
+        action_id: UUID,
+        action_status: str,
+        result_message: Optional[str] = None,
+        error_message: Optional[str] = None
+    ):
+        """
+        Update an intervention action's status.
+
+        Args:
+            action_id: Action UUID
+            action_status: New status
+            result_message: Optional result message
+            error_message: Optional error message
+        """
+        async with self.acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE intervention_actions
+                SET action_status = $2,
+                    result_message = COALESCE($3, result_message),
+                    error_message = COALESCE($4, error_message),
+                    completed_at = CASE
+                        WHEN $2 IN ('success', 'failed') THEN NOW()
+                        ELSE completed_at
+                    END
+                WHERE id = $1
+                """,
+                action_id,
+                action_status,
+                result_message,
+                error_message
+            )
+
+    async def set_pause_resume_prompt(
+        self,
+        paused_session_id: UUID,
+        resume_prompt: str,
+        can_auto_resume: bool = False,
+        resume_context: Optional[Dict[str, Any]] = None
+    ):
+        """
+        Set resume information for a paused session.
+
+        Args:
+            paused_session_id: Paused session UUID
+            resume_prompt: Custom prompt for resuming
+            can_auto_resume: Whether the session can auto-resume
+            resume_context: Additional context for resume
+        """
+        async with self.acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE paused_sessions
+                SET resume_prompt = $2,
+                    can_auto_resume = $3,
+                    resume_context = $4,
+                    updated_at = NOW()
+                WHERE id = $1
+                """,
+                paused_session_id,
+                resume_prompt,
+                can_auto_resume,
+                json.dumps(resume_context or {})
+            )
+
+    # =========================================================================
+    # Session Checkpoint Operations
+    # =========================================================================
+
+    async def create_checkpoint(
+        self,
+        session_id: UUID,
+        project_id: UUID,
+        checkpoint_type: str,
+        current_task_id: Optional[int] = None,
+        current_epic_id: Optional[int] = None,
+        message_count: int = 0,
+        iteration_count: int = 0,
+        conversation_history: Optional[List[Dict[str, Any]]] = None,
+        tool_results_cache: Optional[Dict[str, Any]] = None,
+        completed_tasks: Optional[List[int]] = None,
+        in_progress_tasks: Optional[List[int]] = None,
+        blocked_tasks: Optional[List[int]] = None,
+        metrics_snapshot: Optional[Dict[str, Any]] = None,
+        files_modified: Optional[List[str]] = None,
+        git_commit_sha: Optional[str] = None,
+        resume_notes: Optional[str] = None
+    ) -> UUID:
+        """
+        Create a session checkpoint using SQL function.
+
+        Args:
+            session_id: Session UUID
+            project_id: Project UUID
+            checkpoint_type: Type (task_completion, epic_completion, manual, error)
+            current_task_id: Current task ID
+            current_epic_id: Current epic ID
+            message_count: Message count
+            iteration_count: Iteration count
+            conversation_history: Conversation messages
+            tool_results_cache: Cached tool results
+            completed_tasks: List of completed task IDs
+            in_progress_tasks: List of in-progress task IDs
+            blocked_tasks: List of blocked task IDs
+            metrics_snapshot: Metrics at checkpoint
+            files_modified: List of modified files
+            git_commit_sha: Git commit SHA
+            resume_notes: Resume notes
+
+        Returns:
+            UUID of created checkpoint
+        """
+        async with self.acquire() as conn:
+            checkpoint_id = await conn.fetchval(
+                """
+                SELECT create_checkpoint(
+                    $1::UUID, $2::UUID, $3, $4, $5, $6, $7,
+                    $8::jsonb, $9::jsonb, $10::integer[], $11::integer[],
+                    $12::integer[], $13::jsonb, $14::text[], $15, $16
+                )
+                """,
+                session_id,
+                project_id,
+                checkpoint_type,
+                current_task_id,
+                current_epic_id,
+                message_count,
+                iteration_count,
+                json.dumps(conversation_history or []),
+                json.dumps(tool_results_cache or {}),
+                completed_tasks or [],
+                in_progress_tasks or [],
+                blocked_tasks or [],
+                json.dumps(metrics_snapshot or {}),
+                files_modified or [],
+                git_commit_sha,
+                resume_notes
+            )
+            return checkpoint_id
+
+    async def get_checkpoint(self, checkpoint_id: UUID) -> Optional[Dict[str, Any]]:
+        """
+        Get a checkpoint by ID.
+
+        Args:
+            checkpoint_id: Checkpoint UUID
+
+        Returns:
+            Checkpoint record or None
+        """
+        async with self.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT * FROM session_checkpoints WHERE id = $1",
+                checkpoint_id
+            )
+            return dict(row) if row else None
+
+    async def get_latest_checkpoint(
+        self,
+        session_id: UUID
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Get the latest checkpoint for a session.
+
+        Args:
+            session_id: Session UUID
+
+        Returns:
+            Latest checkpoint or None
+        """
+        async with self.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT * FROM session_checkpoints
+                WHERE session_id = $1
+                ORDER BY checkpoint_number DESC
+                LIMIT 1
+                """,
+                session_id
+            )
+            return dict(row) if row else None
+
+    async def get_resumable_checkpoint(
+        self,
+        session_id: UUID
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Get the latest resumable checkpoint for a session.
+
+        Args:
+            session_id: Session UUID
+
+        Returns:
+            Latest resumable checkpoint or None
+        """
+        async with self.acquire() as conn:
+            checkpoint_id = await conn.fetchval(
+                "SELECT get_latest_resumable_checkpoint($1::UUID)",
+                session_id
+            )
+
+            if not checkpoint_id:
+                return None
+
+            row = await conn.fetchrow(
+                "SELECT * FROM session_checkpoints WHERE id = $1",
+                checkpoint_id
+            )
+            return dict(row) if row else None
+
+    async def invalidate_checkpoints(
+        self,
+        session_id: UUID,
+        reason: str
+    ) -> int:
+        """
+        Invalidate all checkpoints for a session.
+
+        Args:
+            session_id: Session UUID
+            reason: Invalidation reason
+
+        Returns:
+            Number of checkpoints invalidated
+        """
+        async with self.acquire() as conn:
+            count = await conn.fetchval(
+                "SELECT invalidate_checkpoints($1::UUID, $2)",
+                session_id,
+                reason
+            )
+            return count
+
+    async def start_checkpoint_recovery(
+        self,
+        checkpoint_id: UUID,
+        recovery_method: str,
+        new_session_id: Optional[UUID] = None
+    ) -> UUID:
+        """
+        Start a checkpoint recovery attempt.
+
+        Args:
+            checkpoint_id: Checkpoint UUID
+            recovery_method: Method (automatic, manual, partial)
+            new_session_id: Optional new session UUID
+
+        Returns:
+            Recovery record UUID
+        """
+        async with self.acquire() as conn:
+            recovery_id = await conn.fetchval(
+                "SELECT start_checkpoint_recovery($1::UUID, $2, $3::UUID)",
+                checkpoint_id,
+                recovery_method,
+                new_session_id
+            )
+            return recovery_id
+
+    async def complete_checkpoint_recovery(
+        self,
+        recovery_id: UUID,
+        status: str,
+        recovery_notes: Optional[str] = None,
+        error_message: Optional[str] = None,
+        state_differences: Optional[Dict[str, Any]] = None
+    ) -> bool:
+        """
+        Complete a checkpoint recovery attempt.
+
+        Args:
+            recovery_id: Recovery record UUID
+            status: Status (success, failed)
+            recovery_notes: Optional notes
+            error_message: Optional error message
+            state_differences: Optional state differences
+
+        Returns:
+            True if updated successfully
+        """
+        async with self.acquire() as conn:
+            success = await conn.fetchval(
+                "SELECT complete_checkpoint_recovery($1::UUID, $2, $3, $4, $5::jsonb)",
+                recovery_id,
+                status,
+                recovery_notes,
+                error_message,
+                json.dumps(state_differences or {})
+            )
+            return success
+
+    async def get_resumable_sessions(
+        self,
+        project_id: Optional[UUID] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Get all sessions that can be resumed from checkpoints.
+
+        Args:
+            project_id: Optional project UUID filter
+
+        Returns:
+            List of resumable session info
+        """
+        async with self.acquire() as conn:
+            if project_id:
+                rows = await conn.fetch(
+                    "SELECT * FROM v_resumable_checkpoints WHERE project_id = $1",
+                    project_id
+                )
+            else:
+                rows = await conn.fetch("SELECT * FROM v_resumable_checkpoints")
+
+            return [dict(row) for row in rows]
+
+    async def get_checkpoint_recovery_history(
+        self,
+        project_id: Optional[UUID] = None,
+        limit: int = 50
+    ) -> List[Dict[str, Any]]:
+        """
+        Get checkpoint recovery history.
+
+        Args:
+            project_id: Optional project UUID filter
+            limit: Maximum records
+
+        Returns:
+            List of recovery history records
+        """
+        async with self.acquire() as conn:
+            if project_id:
+                rows = await conn.fetch(
+                    """
+                    SELECT * FROM v_checkpoint_recovery_history
+                    WHERE project_id = $1
+                    ORDER BY recovery_initiated_at DESC
+                    LIMIT $2
+                    """,
+                    project_id, limit
+                )
+            else:
+                rows = await conn.fetch(
+                    """
+                    SELECT * FROM v_checkpoint_recovery_history
+                    ORDER BY recovery_initiated_at DESC
+                    LIMIT $1
+                    """,
+                    limit
+                )
+
+            return [dict(row) for row in rows]
 
 
 # =============================================================================

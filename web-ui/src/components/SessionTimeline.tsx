@@ -137,7 +137,9 @@ export function SessionTimeline({ sessions, projectId, onSessionStopped }: Sessi
   return (
     <div className="space-y-3">
       {sessions.map((session) => {
-        const duration = calculateDuration(session.started_at, session.ended_at);
+        const duration = session.started_at
+          ? calculateDuration(session.started_at, session.ended_at || new Date())
+          : 0;
         const isRunning = session.status === 'running';
         const isStopping = stoppingSessionId === session.session_id;
         const isExpanded = expandedSessions.has(session.session_id);

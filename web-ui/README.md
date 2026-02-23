@@ -189,6 +189,3 @@ web-ui-next/
 └── package.json
 ```
 
-## License
-
-Same as parent project (MIT)

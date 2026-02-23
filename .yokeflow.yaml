@@ -22,3 +22,20 @@ project:
 
 review:
   min_reviews_for_analysis: 5  # Minimum deep reviews required for prompt improvement analysis
+
+# Intervention system to prevent infinite loops and notify on blockers
+intervention:
+  # Enable the intervention system
+  enabled: true
+
+  # Maximum retry attempts before blocking (default: 3)
+  max_retries: 3
+
+  # Error rate threshold - pause if error rate exceeds this (default: 0.15 = 15%)
+  error_rate_threshold: 0.15
+
+  # Session duration limit - pause after this many seconds on same task (default: 600 = 10 min)
+  session_duration_limit: 600
+
+  # Detect infrastructure errors like Prisma, Redis, Database issues (default: true)
+  detect_infrastructure_errors: true

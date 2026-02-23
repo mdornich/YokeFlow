@@ -14,6 +14,7 @@ from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient, HookMatcher
 
 from core.security import bash_security_hook
 from core.sandbox_hooks import sandbox_bash_hook, test_hook
+from core.auth import get_oauth_token
 
 
 def get_mcp_env(project_dir: Path, project_id: str = None, docker_container: str = None) -> dict:
@@ -97,7 +98,7 @@ def create_client(project_dir: Path, model: str, project_id: str = None, docker_
 
     # Now check for authentication (after cleaning environment and loading our .env)
     api_key = os.getenv("ANTHROPIC_API_KEY")
-    oauth_token = os.getenv("CLAUDE_CODE_OAUTH_TOKEN")
+    oauth_token = get_oauth_token()
 
     if api_key:
         raise RuntimeError(

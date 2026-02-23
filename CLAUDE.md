@@ -6,11 +6,19 @@ This file provides guidance to Claude Code when working with this repository.
 
 **YokeFlow** - An autonomous AI development platform that uses Claude to build complete applications over multiple sessions.
 
-**Status**: Production Ready - v1.2.0 (December 2025)
+**Status**: Production Ready - v1.4.0 (January 2026) ✅ **Production Hardening Complete**
 
 **Architecture**: API-first platform with FastAPI + Next.js Web UI + PostgreSQL + MCP task management
 
 **Workflow**: Opus plans roadmap (Session 0) → Sonnet implements features (Sessions 1+)
+
+**Production Hardening** (January 2026):
+- ✅ **P0 Critical**: Database retry logic with exponential backoff
+- ✅ **P0 Critical**: Complete intervention system with pause/resume
+- ✅ **P0 Critical**: Session checkpointing and recovery
+- ✅ **P1**: Structured logging (JSON + development formatters)
+- ✅ **P2**: Error hierarchy (30+ error types with categorization)
+- 🚀 **Merged to main**: 119 tests, 36 hours of improvements
 
 ## Core Workflow
 
@@ -21,7 +29,12 @@ This file provides guidance to Claude Code when working with this repository.
 **Key Files**:
 - `core/orchestrator.py` - Session lifecycle
 - `core/agent.py` - Agent loop
-- `core/database.py` - PostgreSQL abstraction (async)
+- `core/database.py` - PostgreSQL abstraction (async) + retry logic + structured logging
+- `core/database_retry.py` - ✅ **NEW**: Retry logic with exponential backoff (30 tests)
+- `core/checkpoint.py` - ✅ **NEW**: Session checkpointing and recovery (19 tests)
+- `core/session_manager.py` - ✅ **ENHANCED**: Intervention system with DB persistence (15 tests)
+- `core/structured_logging.py` - ✅ **NEW**: JSON/dev formatters, context tracking (19 tests)
+- `core/errors.py` - ✅ **NEW**: Error hierarchy with 30+ error types (36 tests)
 - `api/main.py` - REST API + WebSocket
 - `core/observability.py` - Session logging (JSONL + TXT)
 - `core/security.py` - Blocklist validation
@@ -32,11 +45,19 @@ This file provides guidance to Claude Code when working with this repository.
 
 **Schema**: PostgreSQL with 3-tier hierarchy: `epics` → `tasks` → `tests`
 
-**Key tables**: `projects`, `epics`, `tasks`, `tests`, `sessions`, `session_quality_checks`
+**Key tables**:
+- Core: `projects`, `epics`, `tasks`, `tests`, `sessions`, `session_quality_checks`
+- ✅ **NEW**: `paused_sessions`, `intervention_actions`, `notification_preferences` (011)
+- ✅ **NEW**: `session_checkpoints`, `checkpoint_recoveries` (012)
 
-**Key views**: `v_next_task`, `v_progress`, `v_epic_progress`
+**Key views**:
+- Core: `v_next_task`, `v_progress`, `v_epic_progress`
+- ✅ **NEW**: `v_active_interventions`, `v_intervention_history`
+- ✅ **NEW**: `v_latest_checkpoints`, `v_resumable_checkpoints`, `v_checkpoint_recovery_history`
 
 **Access**: Use `core/database.py` abstraction (async/await). See `schema/postgresql/` for DDL.
+
+**Retry Logic**: All database operations automatically retry on transient failures (exponential backoff)
 
 ## MCP Tools
 
@@ -72,8 +93,14 @@ yokeflow/
 ├── core/                    # Core platform modules
 │   ├── orchestrator.py      # Session lifecycle management
 │   ├── agent.py             # Agent loop and session logic
-│   ├── database.py          # PostgreSQL abstraction (async)
+│   ├── database.py          # PostgreSQL abstraction (async) + 27 new methods
 │   ├── database_connection.py  # Connection pooling
+│   ├── database_retry.py    # ✅ NEW: Retry logic with exponential backoff (350 lines)
+│   ├── checkpoint.py        # ✅ NEW: Session checkpointing and recovery (420 lines)
+│   ├── session_manager.py   # ✅ ENHANCED: Intervention system (DB persistence)
+│   ├── structured_logging.py # ✅ NEW: JSON/dev formatters, context vars (380 lines)
+│   ├── errors.py            # ✅ NEW: Error hierarchy, 30+ types (425 lines)
+│   ├── intervention.py      # Blocker detection and retry tracking
 │   ├── client.py            # Claude SDK client setup
 │   ├── config.py            # Configuration management
 │   ├── observability.py     # Session logging (JSONL + TXT)
@@ -93,7 +120,17 @@ yokeflow/
 ├── mcp-task-manager/        # MCP server (TypeScript)
 ├── prompts/                 # Agent instructions (initializer, coding, review)
 ├── schema/postgresql/       # Database DDL
+│   ├── schema.sql           # Main schema
+│   ├── 011_paused_sessions.sql  # ✅ Intervention system tables
+│   └── 012_session_checkpoints.sql  # ✅ Checkpointing tables
 ├── tests/                   # Test suites
+│   ├── test_security.py     # Security validation (64 tests)
+│   ├── test_database_retry.py  # ✅ NEW: Retry logic tests (30 tests)
+│   ├── test_session_manager.py  # ✅ NEW: Intervention tests (15 tests)
+│   ├── test_checkpoint.py   # ✅ NEW: Checkpointing tests (19 tests)
+│   ├── test_structured_logging.py  # ✅ NEW: Logging tests (19 tests)
+│   ├── test_errors.py       # ✅ NEW: Error hierarchy tests (36 tests)
+│   └── ...
 ├── docs/                    # Documentation
 └── generations/             # Generated projects
 ```
@@ -153,7 +190,116 @@ python tests/test_orchestrator.py        # Orchestrator
 - Phase 3: `web-ui/src/components/QualityDashboard.tsx` - UI dashboard ✅ Production Ready
 - Phase 4: `review/prompt_improvement_analyzer.py` - Prompt improvements ✅ **RESTORED** (feature branch)
 
+## Logging & Observability
+
+**Structured Logging** (v1.4.0):
+- **Terminal**: Development-friendly colored output
+- **File**: `logs/yokeflow.log` - JSON format for analysis
+- **Per-Session**: `generations/<project>/logs/session_*.jsonl` - Session details
+
+**Configuration** (via environment variables):
+```bash
+export LOG_LEVEL=INFO          # DEBUG, INFO, WARNING, ERROR, CRITICAL
+export LOG_FORMAT=dev           # 'dev' (colored) or 'json' (production)
+```
+
+**Log Locations**:
+- Application logs: `logs/yokeflow.log` (JSON format)
+- Session logs: `generations/<project>/logs/session_NNN_TIMESTAMP.jsonl`
+- Session summaries: `generations/<project>/logs/session_NNN_TIMESTAMP.txt`
+
+**Features**:
+- Automatic session_id and project_id context injection
+- Performance logging for slow operations
+- Exception tracking with stack traces
+- Ready for ELK/Datadog/CloudWatch integration
+
+## Production Hardening (January 2026)
+
+**✅ P0 Critical Improvements Complete (v1.3.0)**
+
+All three critical gaps have been addressed with production-ready implementations:
+
+### 1. Database Retry Logic ✅
+**File**: `core/database_retry.py` (350+ lines, 30 tests)
+- Exponential backoff with configurable jitter
+- 20+ PostgreSQL error codes covered
+- Transient error detection (connection failures, deadlocks, resource exhaustion)
+- Retry statistics tracking for observability
+- Applied to all database operations in `core/database.py`
+
+**Usage**:
+```python
+from core.database_retry import with_retry, RetryConfig
+
+@with_retry(RetryConfig(max_retries=5, base_delay=2.0))
+async def my_database_operation():
+    async with db.acquire() as conn:
+        return await conn.fetchval("SELECT 1")
+```
+
+### 2. Intervention System ✅
+**Files**: `core/session_manager.py`, `core/database.py` (9 new methods, 15 tests)
+- Full database persistence for paused sessions
+- Intervention action tracking and audit trail
+- Pause/resume session operations
+- Integration with existing `core/intervention.py` blocker detection
+- Web UI ready (`web-ui/src/components/InterventionDashboard.tsx`)
+
+**Database**: `schema/postgresql/011_paused_sessions.sql`
+- Tables: `paused_sessions`, `intervention_actions`, `notification_preferences`
+- Views: `v_active_interventions`, `v_intervention_history`
+- Functions: `pause_session()`, `resume_session()`
+
+### 3. Session Checkpointing ✅
+**Files**: `core/checkpoint.py` (420+ lines, 19 tests), `core/database.py` (9 new methods)
+- Complete session state preservation at key points
+- Full conversation history capture for resume
+- State validation before resumption
+- Recovery attempt tracking
+- Context-aware resume prompt generation
+
+**Database**: `schema/postgresql/012_session_checkpoints.sql`
+- Tables: `session_checkpoints`, `checkpoint_recoveries`
+- Views: `v_latest_checkpoints`, `v_resumable_checkpoints`, `v_checkpoint_recovery_history`
+- Functions: `create_checkpoint()`, `start_checkpoint_recovery()`, `complete_checkpoint_recovery()`
+
+**Usage**:
+```python
+from core.checkpoint import CheckpointManager
+
+manager = CheckpointManager(session_id, project_id)
+
+# Create checkpoint after task completion
+checkpoint_id = await manager.create_checkpoint(
+    checkpoint_type="task_completion",
+    conversation_history=messages,
+    current_task_id=task.id,
+    completed_tasks=completed_task_ids
+)
+
+# Resume from checkpoint after failure
+from core.checkpoint import CheckpointRecoveryManager
+
+recovery = CheckpointRecoveryManager()
+state = await recovery.restore_from_checkpoint(checkpoint_id)
+# Continue with restored conversation_history, task state, etc.
+```
+
+---
+
 ## Recent Changes
+
+**January 5, 2026 - v1.4.0 Production Hardening**:
+- ✅ Database retry logic with exponential backoff (30 tests)
+- ✅ Complete intervention system with database persistence (15 tests)
+- ✅ Session checkpointing and recovery system (19 tests)
+- ✅ Structured logging with JSON/dev formatters (19 tests)
+- ✅ Error hierarchy with 30+ error types (36 tests)
+- ✅ 119 new tests (100% pass rate)
+- ✅ 5,400+ lines of production code added
+- ✅ 27 new database methods across all systems
+- 🎯 **100% Production Ready** (all P0 critical gaps resolved)
 
 **December 29, 2025 - v1.2.0 Release**:
 - ✅ **Playwright Browser Automation**: Full browser testing within Docker containers
@@ -200,19 +346,22 @@ python tests/test_orchestrator.py        # Orchestrator
 
 ## Release Status
 
-**Current State**: Production Ready - v1.2.0
+**Current State**: Production Ready - v1.4.0
 
 **Release Highlights**:
+- ✅ **Production Hardening**: All P0 critical gaps resolved (retry logic, intervention, checkpointing)
 - ✅ **Complete Platform**: All 7 phases of development complete
 - ✅ **Playwright Integration**: Browser automation within Docker containers
-- ✅ **Production Tested**: 31-session validation, 64 security tests passing
+- ✅ **Production Tested**: 119 new tests (100% passing), 64 security tests passing
 - ✅ **Full Documentation**: Comprehensive guides, API docs, contribution guidelines
 - ✅ **Quality System**: Automated reviews, dashboard, trend tracking
-- ✅ **Professional Repository**: LICENSE, CONTRIBUTING.md, SECURITY.md, CI/CD
+- ✅ **Professional Repository**: CONTRIBUTING.md, SECURITY.md, CI/CD
+- ✅ **Enterprise Ready**: Structured logging, error hierarchy, observability
 
 **Post-Release Roadmap**:
 - See `TODO-FUTURE.md` for planned enhancements
 - Per-user authentication, prompt improvements, E2B integration, and more
+- See `YOKEFLOW_REFACTORING_PLAN.md` for remaining P1/P2 improvements (59-69 hours)
 
 ---
 

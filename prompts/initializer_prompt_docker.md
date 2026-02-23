@@ -268,21 +268,216 @@ mcp__task-manager__bash_docker({
 
 ---
 
+## 🐳 DOCKER SERVICES CONFIGURATION
+
+**CRITICAL:** When your project needs Docker services (PostgreSQL, Redis, MinIO, etc.), follow these rules to avoid conflicts with YokeFlow's own services.
+
+### ⚠️ Port Conflict Prevention
+
+YokeFlow uses these ports for its own services:
+- **5432** - YokeFlow's PostgreSQL database
+- **8000** - YokeFlow's API server
+- **3000** - YokeFlow's Web UI
+
+**YOUR PROJECT MUST USE DIFFERENT PORTS!**
+
+### 📋 Docker Services Rules
+
+When creating `docker-compose.yml` for your project:
+
+#### 1. Always Use Shifted Ports
+
+```yaml
+version: '3.8'
+
+services:
+  # PostgreSQL - Use 5433 instead of 5432
+  postgres:
+    image: postgres:16-alpine
+    container_name: ${PROJECT_NAME}-postgres  # Unique container name
+    ports:
+      - "5433:5432"  # SHIFTED PORT - Avoids YokeFlow conflict
+    environment:
+      POSTGRES_USER: ${PROJECT_NAME}
+      POSTGRES_PASSWORD: ${PROJECT_NAME}_dev
+      POSTGRES_DB: ${PROJECT_NAME}
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${PROJECT_NAME}']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis - Use 6380 instead of 6379
+  redis:
+    image: redis:7-alpine
+    container_name: ${PROJECT_NAME}-redis
+    ports:
+      - "6380:6379"  # SHIFTED PORT
+
+  # MinIO - Use 9002/9003 instead of 9000/9001
+  minio:
+    image: minio/minio:latest
+    container_name: ${PROJECT_NAME}-minio
+    command: server /data --console-address ":9001"
+    ports:
+      - "9002:9000"  # SHIFTED PORT for API
+      - "9003:9001"  # SHIFTED PORT for Console
+
+  # Meilisearch - Use 7701 instead of 7700
+  meilisearch:
+    image: getmeili/meilisearch:latest
+    container_name: ${PROJECT_NAME}-meilisearch
+    ports:
+      - "7701:7700"  # SHIFTED PORT
+```
+
+#### 2. Port Allocation Table
+
+Use this port allocation strategy:
+
+| Service | Default Port | YokeFlow Uses | Your Project Should Use |
+|---------|-------------|---------------|------------------------|
+| PostgreSQL | 5432 | ✅ 5432 | 5433, 5434, 5435... |
+| Redis | 6379 | - | 6380, 6381, 6382... |
+| MinIO API | 9000 | - | 9002, 9004, 9006... |
+| MinIO Console | 9001 | - | 9003, 9005, 9007... |
+| Meilisearch | 7700 | - | 7701, 7702, 7703... |
+| Elasticsearch | 9200 | - | 9202, 9204, 9206... |
+
+#### 3. Create Environment Configuration
+
+Create TWO environment files:
+
+**`.env` - For local development (outside container):**
+```bash
+# Database connections for local development
+DATABASE_URL=postgresql://myapp:myapp_dev@localhost:5433/myapp
+REDIS_URL=redis://localhost:6380
+MINIO_ENDPOINT=localhost:9002
+```
+
+**`.env.docker` - For app running in Docker container:**
+```bash
+# Database connections from inside Docker container
+# Uses host.docker.internal to reach services on host
+DATABASE_URL=postgresql://myapp:myapp_dev@host.docker.internal:5433/myapp
+REDIS_URL=redis://host.docker.internal:6380
+MINIO_ENDPOINT=host.docker.internal:9002
+```
+
+#### 4. Update init.sh to Start Services
+
+In your `init.sh`, start Docker services ON THE HOST before any container operations:
+
+```bash
+#!/bin/bash
+set -e
+
+echo "🐳 Starting Docker services on HOST..."
+
+# Check for port conflicts first
+check_port() {
+    if lsof -i :$1 > /dev/null 2>&1; then
+        echo "❌ ERROR: Port $1 is already in use!"
+        lsof -i :$1 | grep LISTEN
+        exit 1
+    fi
+}
+
+# Check shifted ports are available
+check_port 5433  # PostgreSQL
+check_port 6380  # Redis
+check_port 9002  # MinIO API
+check_port 9003  # MinIO Console
+
+# Start services with docker-compose
+if [ -f docker-compose.yml ]; then
+    echo "Starting services with docker-compose..."
+    docker-compose up -d
+
+    echo "Waiting for services to be healthy..."
+    sleep 5
+    docker-compose ps
+
+    # Test PostgreSQL connection (if applicable)
+    if docker ps --format '{{.Names}}' | grep -q postgres; then
+        echo "Testing PostgreSQL connection..."
+        docker exec $(docker ps --filter "name=postgres" -q | head -1) pg_isready || true
+    fi
+fi
+
+echo "✅ Docker services started successfully!"
+
+# Rest of init.sh continues...
+```
+
+#### 5. Application Code Connection Logic
+
+In your application, detect the environment and use appropriate connection strings:
+
+**TypeScript/JavaScript:**
+```typescript
+// config/database.ts
+const isDocker = process.env.DOCKER_ENV === 'true';
+
+export const config = {
+  database: {
+    url: isDocker
+      ? process.env.DATABASE_URL?.replace('localhost', 'host.docker.internal')
+      : process.env.DATABASE_URL
+  },
+  redis: {
+    url: isDocker
+      ? process.env.REDIS_URL?.replace('localhost', 'host.docker.internal')
+      : process.env.REDIS_URL
+  }
+};
+```
+
+**Python:**
+```python
+# config.py
+import os
+
+is_docker = os.environ.get('DOCKER_ENV') == 'true'
+
+DATABASE_URL = os.environ.get('DATABASE_URL')
+if is_docker and DATABASE_URL:
+    DATABASE_URL = DATABASE_URL.replace('localhost', 'host.docker.internal')
+```
+
+### 🚫 What NOT to Do
+
+**NEVER attempt these approaches:**
+
+1. ❌ **Don't use default ports (5432, 6379, etc.)** - Conflicts with YokeFlow
+2. ❌ **Don't try to start Docker inside the container** - Docker-in-Docker issues
+3. ❌ **Don't use --network=host** - Breaks isolation and causes conflicts
+4. ❌ **Don't hardcode localhost in container** - Use host.docker.internal
+
+### ✅ Verification Steps
+
+After creating Docker services configuration:
+
+1. **Verify ports are shifted:**
+   ```bash
+   grep -E "ports:|[0-9]+:[0-9]+" docker-compose.yml
+   # Should show: 5433:5432, 6380:6379, etc.
+   ```
+
+2. **Document the ports in README:**
+   ```markdown
+   ## Docker Services
+
+   This project uses the following services (on shifted ports):
+   - PostgreSQL: localhost:5433
+   - Redis: localhost:6380
+   - MinIO: localhost:9002 (API), localhost:9003 (Console)
+   ```
+
+---
+
 **When you see "bash tool" in instructions below, interpret as `bash_docker` in Docker mode.**
-
-# Initializer Agent Prompt (v4 - MCP with Batching Efficiency)
-
-**Version History:**
-- v4 (Dec 12, 2025): Added batching guidance for epic and test creation (30-40% faster initialization)
-- v3: MCP-Based Hierarchical Approach
-- v2: Task expansion improvements
-- v1: Initial version
-
-**Key improvements in v4:**
-- ✅ Batched epic creation (50-70% faster than one-by-one)
-- ✅ Batched test creation per epic (30-40% session time reduction)
-- ✅ Reduced context window usage (fewer intermediate status checks)
-- ✅ Clear workflow: draft → batch create → verify once
 
 ## YOUR ROLE - INITIALIZER AGENT (Session 0 - Initialization)
 
@@ -461,51 +656,96 @@ tasks: [
 
 **After expanding each epic, add tests for the tasks:**
 
+**CRITICAL: Categorize tasks to determine appropriate test type!**
+
+**Task Type Detection (examine task title/description):**
+- **UI Tasks**: Contains "UI", "component", "page", "form", "button", "display", "layout", "style", "view"
+- **API Tasks**: Contains "API", "endpoint", "route", "middleware", "server", "REST", "GraphQL", "webhook"
+- **Config Tasks**: Contains "config", "setup", "TypeScript", "build", "package", "dependencies", "tooling"
+- **Database Tasks**: Contains "database", "schema", "table", "migration", "model", "query", "ORM"
+- **Integration Tasks**: Contains "workflow", "end-to-end", "user journey", "full stack", "complete flow"
+
 **EFFICIENCY TIP:** Batch test creation for all tasks within an epic rather than creating tests one-by-one.
 
 **Recommended approach:**
 1. **Expand epic** - Get all task IDs back from `expand_epic` response
-2. **Plan all tests** - Review the tasks and draft test descriptions for each
-3. **Batch create tests** - Make sequential `create_test` calls for all tasks in the epic
-4. **Continue to next epic** - Don't check status between each test, verify once per epic
+2. **Categorize each task** - Determine if it's UI, API, Config, Database, or Integration
+3. **Plan appropriate tests** - Create test descriptions matching the task type
+4. **Batch create tests** - Make sequential `create_test` calls with proper verification type
+5. **Continue to next epic** - Don't check status between each test, verify once per epic
 
-**Example batched test creation (for Epic 1 tasks):**
+**Example batched test creation showing different test types:**
 ```
+# Task 1: "Initialize TypeScript configuration" (CONFIG TASK)
 mcp__task-manager__create_test
 task_id: 1
 category: "functional"
-description: "Server starts and responds to health check"
-steps: ["Start the server", "GET /health endpoint", "Verify 200 response", "Verify response body contains status"]
+description: "TypeScript compiles without errors"
+steps: ["Run tsc --noEmit", "Verify no compilation errors", "Check tsconfig.json settings"]
+verification_type: "build"  # No browser needed!
 
-mcp__task-manager__create_test
-task_id: 1
-category: "style"
-description: "Health endpoint returns proper JSON format"
-steps: ["Check Content-Type header", "Verify JSON structure matches spec"]
-
+# Task 2: "Create Fastify server with middleware" (API TASK)
 mcp__task-manager__create_test
 task_id: 2
 category: "functional"
-description: "Database connection successful"
-steps: ["Import db module", "Verify connection pool created", "Test query execution"]
+description: "Server responds to health check"
+steps: ["Start server", "curl http://localhost:3001/health", "Verify 200 status", "Check JSON response"]
+verification_type: "api"  # curl testing, not browser!
 
-... (continue for all tasks in the epic)
+# Task 3: "Build login form component" (UI TASK)
+mcp__task-manager__create_test
+task_id: 3
+category: "functional"
+description: "Login form displays and accepts input"
+steps: ["Navigate to /login", "Check form fields visible", "Enter credentials", "Submit form", "Verify navigation to dashboard"]
+verification_type: "browser"  # Requires Playwright!
+
+# Task 4: "Create users database table" (DATABASE TASK)
+mcp__task-manager__create_test
+task_id: 4
+category: "functional"
+description: "Users table created with correct schema"
+steps: ["Run migration", "Query table structure", "Verify columns and types", "Test insert/select"]
+verification_type: "database"  # SQL queries, not browser!
+
+# Task 5: "Implement complete authentication flow" (INTEGRATION TASK)
+mcp__task-manager__create_test
+task_id: 5
+category: "functional"
+description: "User can register, login, and access protected routes"
+steps: ["Register new user", "Login with credentials", "Access dashboard", "Logout", "Verify redirect to login"]
+verification_type: "e2e"  # Full browser workflow!
 ```
 
-**Test categories:**
+**Test categories remain the same:**
 - `functional` - Feature works correctly
-- `style` - Visual appearance, UI/UX
-- `accessibility` - Keyboard nav, screen readers, ARIA
+- `style` - Visual appearance, UI/UX (UI tasks only)
+- `accessibility` - Keyboard nav, screen readers (UI tasks only)
 - `performance` - Speed, efficiency
+
+**Verification types (NEW - helps coding agent choose right test approach):**
+- `browser` - UI components requiring visual verification
+- `api` - Backend endpoints testable with curl/fetch
+- `build` - Configuration/compilation verification
+- `database` - Schema/query testing with SQL
+- `e2e` - Complete user workflows needing full browser testing
 
 **Aim for:**
 - 1-3 tests per task
-- Mix of functional and style tests
+- Appropriate verification type for each task category
 - Specific, verifiable test steps
+- NO browser tests for config/database tasks (wastes time)
+- ALWAYS browser tests for UI tasks (catches visual issues)
+
+**Why task-specific testing matters:**
+- Config/database tasks with browser testing waste 5-10 min per task
+- API tasks verified with curl are 80% faster than browser tests
+- UI tasks NEED browser testing to catch visual/interaction bugs
+- Proper test categorization reduces coding session time by 30-40%
 
 **Why batch test creation:**
 - Much faster than alternating between create_test and status checks
-- Reduces session time by 30-40% (initialization sessions can be 15-20 minutes)
+- Reduces initialization time by 30-40%
 - Database handles bulk inserts efficiently
 - Lets you maintain focus on test planning rather than constant verification
 
@@ -624,7 +864,7 @@ chmod +x init.sh
 
 ---
 
-## TASK 4: Create Project Structure
+## TASK 5: Create Project Structure
 
 Based on app_spec.txt, create the initial directory structure. This varies
 based on the technology stack specified.
@@ -644,8 +884,14 @@ Create initial configuration files (package.json, requirements.txt, etc.)
 based on the dependencies mentioned in app_spec.txt.
 
 ---
+## TASK 6: When your project needs Docker services, start Docker on HOST
+- For this task only, use Bash instead of bash_docker
 
-## TASK 5: Initialize Git Repository
+```bash
+docker-compose up -d
+```
+
+## TASK 7: Initialize Git Repository
 
 ```bash
 git init
@@ -728,8 +974,14 @@ git commit -m "Initialization complete"
 ### Epic/Task Guidelines
 - Every feature in app_spec.txt must become an epic or task
 - Tasks should be specific and implementable in one session
-- Tests should be verifiable through the UI
-- Include both functional and style tests
+- Tests should be verifiable using appropriate methods:
+  - UI tasks: Browser verification with screenshots
+  - API tasks: curl/fetch endpoint testing
+  - Config tasks: Build/compilation checks
+  - Database tasks: SQL query verification
+  - Integration tasks: Full E2E browser workflows
+- Include functional tests for all tasks
+- Include style tests only for UI tasks
 
 ---
 

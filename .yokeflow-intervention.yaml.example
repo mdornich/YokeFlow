@@ -1,0 +1,50 @@
+# YokeFlow Intervention Configuration Example
+# Copy this to .yokeflow.yaml and customize for your needs
+
+# Intervention system to prevent infinite loops and notify on blockers
+intervention:
+  # Enable the intervention system
+  enabled: true
+
+  # Maximum retry attempts before blocking (default: 3)
+  max_retries: 3
+
+  # Error rate threshold - pause if error rate exceeds this (default: 0.15 = 15%)
+  error_rate_threshold: 0.15
+
+  # Session duration limit - pause after this many seconds on same task (default: 600 = 10 min)
+  session_duration_limit: 600
+
+  # Detect infrastructure errors like Prisma, Redis, Database issues (default: true)
+  detect_infrastructure_errors: true
+
+# Webhook URL for notifications (can also be set via YOKEFLOW_WEBHOOK_URL env var)
+# Supports Slack, Discord, or generic webhooks
+#
+# For Slack:
+#   1. Create an Incoming Webhook: https://api.slack.com/messaging/webhooks
+#   2. Set the URL here or in YOKEFLOW_WEBHOOK_URL env var
+#
+# For Discord:
+#   1. Create a webhook in your channel settings
+#   2. Set the URL here or in YOKEFLOW_WEBHOOK_URL env var
+#
+# Example webhook URLs (replace with your actual webhook):
+# intervention:
+#   webhook_url: "https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXX"
+# intervention:
+#   webhook_url: "https://discord.com/api/webhooks/0000000000000000000/XXXXXXXXXXXXXXXXXXXX"
+
+# You can also set via environment variable in .env:
+# YOKEFLOW_WEBHOOK_URL=https://hooks.slack.com/services/...
+
+# Other configuration options can go here
+models:
+  initializer: "claude-opus-4-5-20251101"
+  coding: "claude-sonnet-4-5-20250929"
+
+timing:
+  auto_continue_delay: 3  # seconds between sessions
+
+project:
+  max_iterations: null  # null = unlimited, or set a number to limit sessions

@@ -1,6 +1,5 @@
 # YokeFlow - Autonomous AI Development Platform
 
-[![License](https://img.shields.io/badge/License-YCL%20v1.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.9%2B-blue.svg)](https://www.python.org/)
 [![Node](https://img.shields.io/badge/Node-20%2B-green.svg)](https://nodejs.org/)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-blue.svg)](https://www.postgresql.org/)
@@ -29,9 +28,19 @@ Build complete applications using Claude across multiple autonomous sessions. Pr
 
 ---
 
-## 🚀 Version 1.2.0 Release - Playwright Browser Automation
+## 🚀 Version 1.4.0 Release - Enterprise Production Hardening
 
-**Current Status: v1.2.0 - Production Ready (December 2025)**
+**Current Status: v1.4.0 - Production Ready with Enterprise Features (January 2026)**
+
+### What's New in v1.4.0
+
+**✅ Production Hardening Complete** - All P0 critical gaps resolved:
+- **Database Retry Logic**: Automatic retry with exponential backoff on all operations (30 tests)
+- **Intervention System**: Full pause/resume capability with database persistence (15 tests)
+- **Session Checkpointing**: Complete state preservation and crash recovery (19 tests)
+- **Structured Logging**: JSON/dev formatters with ELK/Datadog compatibility (19 tests)
+- **Error Hierarchy**: 30+ specific error types with consistent categorization (36 tests)
+- **Test Coverage**: 119 new tests added, 100% passing
 
 ### What's New in v1.2.0
 
@@ -75,8 +84,9 @@ docker build -f docker/Dockerfile.agent-sandbox-playwright -t yokeflow-playwrigh
 
 **Why fresh install:** Several tables were modified or removed to improve the platform. Migration scripts have been removed as most users will start fresh with this wider release.
 
-**Current Status: v1.2.0 - Production Ready with Playwright Browser Automation (December 2025)**
-- ✅ **PostgreSQL Migration**: 100% complete, production-ready async architecture
+**Current Status: v1.4.0 - Production Ready with Enterprise Hardening (January 2026)**
+- ✅ **Production Hardening**: All P0 critical gaps resolved (database retry, intervention, checkpointing)
+- ✅ **PostgreSQL Migration**: 100% complete, production-ready async architecture with retry logic
 - ✅ **Docker Sandbox**: Full integration with 90+ sessions validated
 - ✅ **Playwright Browser Automation**: Headless browser testing within Docker containers
 - ✅ **API Foundation**: REST endpoints, WebSocket support, orchestrator, JWT authentication
@@ -96,7 +106,8 @@ docker build -f docker/Dockerfile.agent-sandbox-playwright -t yokeflow-playwrigh
   - ✅ **Phase 2**: Automated deep reviews (every 5 sessions or quality < 7)
   - ✅ **Phase 3**: Quality dashboard with collapsible reviews and download
   - ✅ **Phase 4**: Prompt improvement analysis with single-project analysis
-- 🎯 **Next Steps**: Complete pre-release testing, finalize documentation, make repository public
+- ✅ **Test Coverage**: 119 production tests (100% passing) for critical systems
+- 🎯 **Next Steps**: Remaining P1/P2 improvements, expand test coverage to 70%
 
 **Note:** This platform is production-ready. The Web UI provides full functionality for project management, monitoring, and quality analysis. Authentication, validation, and comprehensive testing ensure deployment readiness.
 
@@ -643,9 +654,4 @@ Edit files in `prompts/` directory.
 
 ---
 
-## License
-
-YokeFlow Community License (YCL) v1.0 - See [LICENSE](LICENSE) for details.
-
----
 

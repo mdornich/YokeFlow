@@ -197,6 +197,22 @@ class DockerSandbox(Sandbox):
         self.port_mappings = self.config.get("ports", [])
         self.session_type = self.config.get("session_type", "coding")  # "initializer" or "coding"
 
+    def _get_host_project_path(self) -> str:
+        """
+        Convert container path to host path for Docker-in-Docker volume mounts.
+        Uses HOST_GENERATIONS_PATH env var to perform the conversion.
+        """
+        host_generations_path = os.environ.get("HOST_GENERATIONS_PATH")
+        if host_generations_path:
+            project_path = str(self.project_dir.resolve())
+            container_generations = "/app/generations"
+            if project_path.startswith(container_generations):
+                relative_path = project_path[len(container_generations):]
+                host_path = host_generations_path.rstrip("/\\") + relative_path
+                logger.info(f"[DinD] Converted path: {project_path} -> {host_path}")
+                return host_path
+        return str(self.project_dir.resolve())
+
     async def start(self) -> None:
         """Create and start Docker container (with reuse for coding sessions)."""
         import docker
@@ -322,7 +338,7 @@ class DockerSandbox(Sandbox):
                 nano_cpus=int(float(self.cpu_limit) * 1e9),
                 ports=port_bindings if port_bindings else None,
                 volumes={
-                    str(self.project_dir.resolve()): {
+                    self._get_host_project_path(): {
                         "bind": "/workspace",
                         "mode": "rw"
                     }

@@ -18,6 +18,22 @@ from core.database_connection import DatabaseManager
 from core.progress import print_session_header, print_progress_summary
 from core.prompts import get_initializer_prompt, get_coding_prompt, copy_spec_to_project
 from core.observability import SessionLogger, QuietOutputFilter, create_session_logger
+from core.intervention import InterventionManager
+from core.structured_logging import (
+    get_logger,
+    set_session_id,
+    set_project_id,
+    clear_context,
+    PerformanceLogger
+)
+from core.errors import (
+    SessionError,
+    ToolExecutionError,
+    ClaudeAPIError
+)
+
+# Module-level structured logger (use 'module_logger' to avoid conflict with SessionLogger parameter)
+module_logger = get_logger(__name__)
 
 
 # Configuration
@@ -93,6 +109,7 @@ async def run_agent_session(
     verbose: bool = False,
     session_manager: Optional[SessionManager] = None,
     progress_callback: Optional[Callable[[Dict[str, Any]], Awaitable[None]]] = None,
+    intervention_config: Optional[Dict[str, Any]] = None,
 ) -> tuple[str, str]:
     """
     Run a single agent session using Claude Agent SDK.
@@ -112,7 +129,28 @@ async def run_agent_session(
         - "continue" if agent should continue working
         - "error" if an error occurred
     """
+    # Set context for structured logging
+    if hasattr(logger, "session_id"):
+        set_session_id(str(logger.session_id))
+    if hasattr(logger, "project_id"):
+        set_project_id(str(logger.project_id))
+
+    module_logger.info("Starting agent session", extra={
+        "project_dir": str(project_dir),
+        "verbose": verbose,
+        "intervention_enabled": intervention_config.get("enabled", False) if intervention_config else False
+    })
+
     output_filter = QuietOutputFilter(verbose=verbose)
+
+    # Initialize intervention manager if config provided
+    intervention_manager = None
+    if intervention_config and intervention_config.get("enabled", False):
+        intervention_manager = InterventionManager(intervention_config)
+        # Set session info for notifications
+        session_id = logger.session_id if hasattr(logger, "session_id") else "unknown"
+        project_name = project_dir.name
+        intervention_manager.set_session_info(session_id, project_name)
 
     if verbose:
         print("Sending prompt to Claude Agent SDK...\n")
@@ -179,6 +217,15 @@ async def run_agent_session(
                             print("   Check generations/{project}/.env and remove ANTHROPIC_API_KEY if present.", flush=True)
                             raise RuntimeError(error_msg)
 
+                        # Check for OAuth/authentication errors (token expired)
+                        if "API Error: 401" in block.text or "authentication_error" in block.text:
+                            error_msg = "OAuth token has expired - please refresh your authentication"
+                            logger.log_error(error_msg)
+                            print(f"\n[X] FATAL ERROR: {error_msg}", flush=True)
+                            print("   Your Claude OAuth token has expired and needs to be refreshed.", flush=True)
+                            print("   Run: claude /login", flush=True)
+                            raise RuntimeError(error_msg)
+
                         # Log assistant text
                         logger.log_assistant_text(block.text)
 
@@ -197,6 +244,73 @@ async def run_agent_session(
 
                         # Log tool use
                         logger.log_tool_use(tool_name, tool_id, tool_input)
+
+                        # Check for retry loops with intervention manager
+                        if intervention_manager:
+                            is_blocked, reason = await intervention_manager.check_tool_use(
+                                tool_name, tool_input
+                            )
+                            if is_blocked:
+                                # Document blocker and halt session
+                                error_msg = f"🚨 INTERVENTION: {reason}"
+                                print(f"\n{error_msg}\n")
+                                logger.log_error(error_msg)
+
+                                # Document in claude-progress.md
+                                task_info = {"id": "unknown", "description": "Current task"}
+                                intervention_manager.document_blocker(
+                                    project_dir, task_info, reason
+                                )
+
+                                # Pause the session and save state
+                                from core.session_manager import PausedSessionManager
+                                from core.notifications import MultiChannelNotificationService
+
+                                paused_manager = PausedSessionManager()
+
+                                # Get project and session IDs from logger or config
+                                session_id = getattr(logger, 'session_id', 'unknown')
+                                project_id = getattr(logger, 'project_id', 'unknown')
+
+                                # Determine pause type based on reason
+                                pause_type = "retry_limit"
+                                if "critical error" in reason.lower():
+                                    pause_type = "critical_error"
+                                elif "timeout" in reason.lower():
+                                    pause_type = "timeout"
+
+                                # Save paused session state
+                                paused_session_id = await paused_manager.pause_session(
+                                    session_id=session_id,
+                                    project_id=project_id,
+                                    reason=reason,
+                                    pause_type=pause_type,
+                                    intervention_manager=intervention_manager,
+                                    current_task=task_info,
+                                    message_count=message_count
+                                )
+
+                                # Send notifications if configured
+                                if intervention_config.get("notifications", {}).get("enabled"):
+                                    notifier = MultiChannelNotificationService(intervention_config.get("notifications", {}))
+                                    await notifier.send_notification(
+                                        title="Session Paused - Intervention Required",
+                                        message=f"Session for {project_dir.name} has been paused due to: {reason}",
+                                        details={
+                                            "project_name": project_dir.name,
+                                            "session_id": session_id,
+                                            "pause_type": pause_type,
+                                            "current_task": task_info.get("description", "Unknown"),
+                                            "intervention_id": paused_session_id
+                                        }
+                                    )
+
+                                print(f"\n📋 Session paused (ID: {paused_session_id})")
+                                print(f"   To resume: Use the Web UI or API to resolve and resume")
+                                print(f"   API endpoint: POST /api/interventions/{paused_session_id}/resume\n")
+
+                                # Return error status to halt session
+                                return "error", f"Session paused for intervention: {reason}"
 
                         # Defensive check: Warn about risky background bash usage
                         if tool_name == "Bash" and tool_input.get("run_in_background"):
@@ -271,6 +385,25 @@ async def run_agent_session(
 
                         # Log tool result
                         logger.log_tool_result(tool_id, result_content, is_error)
+
+                        # Check for errors with intervention manager
+                        if is_error and intervention_manager:
+                            error_msg = str(result_content)
+                            is_blocked, reason = await intervention_manager.check_tool_error(error_msg)
+                            if is_blocked:
+                                # Document blocker and halt session
+                                error_msg = f"🚨 INTERVENTION: {reason}"
+                                print(f"\n{error_msg}\n")
+                                logger.log_error(error_msg)
+
+                                # Document in claude-progress.md
+                                task_info = {"id": "unknown", "description": "Current task"}
+                                intervention_manager.document_blocker(
+                                    project_dir, task_info, reason
+                                )
+
+                                # Return error status to halt session
+                                return "error", f"Session blocked due to critical error: {reason}"
 
                         # Send progress update via callback
                         if progress_callback:
@@ -347,14 +480,32 @@ async def run_agent_session(
         # Finalize logging and get session summary
         session_summary = logger.finalize("continue", response_text, usage_data=usage_data)
 
+        module_logger.info("Agent session completed successfully", extra={
+            "status": "continue",
+            "message_count": message_count,
+            "usage": usage_data
+        })
+
+        # Clear context before returning
+        clear_context()
+
         return "continue", response_text, session_summary
 
     except Exception as e:
         print(f"Error during agent session: {e}")
 
-        # Log error
+        # Log error with structured logging
+        module_logger.error("Agent session failed", exc_info=True, extra={
+            "error_type": type(e).__name__,
+            "message_count": message_count if 'message_count' in locals() else 0
+        })
+
+        # Log error to session logger
         logger.log_error(e)
         session_summary = logger.finalize("error", "", usage_data=usage_data)
+
+        # Clear context before returning
+        clear_context()
 
         return "error", str(e), session_summary
 

@@ -94,6 +94,21 @@ class SandboxConfig:
 
 
 @dataclass
+class InterventionConfig:
+    """Configuration for intervention and retry management."""
+    enabled: bool = False  # Enable/disable intervention system
+    max_retries: int = 3  # Maximum retry attempts before blocking
+
+    # Notification settings
+    webhook_url: Optional[str] = field(default_factory=lambda: os.getenv("YOKEFLOW_WEBHOOK_URL"))
+
+    # Auto-pause conditions
+    error_rate_threshold: float = 0.15  # Pause if error rate > 15%
+    session_duration_limit: int = 600  # Pause after 10 minutes on same task
+    detect_infrastructure_errors: bool = True  # Pause on Redis/DB/Prisma errors
+
+
+@dataclass
 class Config:
     """Main configuration class."""
     models: ModelConfig = field(default_factory=ModelConfig)
@@ -103,6 +118,7 @@ class Config:
     project: ProjectConfig = field(default_factory=ProjectConfig)
     review: ReviewConfig = field(default_factory=ReviewConfig)
     sandbox: SandboxConfig = field(default_factory=SandboxConfig)
+    intervention: InterventionConfig = field(default_factory=InterventionConfig)
 
     @classmethod
     def load_from_file(cls, config_path: Path) -> 'Config':

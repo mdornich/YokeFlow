@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Optional, Dict, Any, List, Callable, Awaitable, TYPE_CHECKING
 from datetime import datetime
 from uuid import UUID
-import logging
+import os
 
 import asyncpg
 
@@ -30,6 +30,7 @@ from core.client import create_client
 from core.database_connection import get_db, DatabaseManager, is_postgresql_configured
 from core.orchestrator_models import SessionStatus, SessionType, SessionInfo
 from core.quality_integration import QualityIntegration
+from core.structured_logging import get_logger, setup_structured_logging
 
 if TYPE_CHECKING:
     from core.database import TaskDatabase
@@ -44,7 +45,19 @@ from core.config import Config
 from core.sandbox_manager import SandboxManager
 from core.sandbox_hooks import set_active_sandbox, clear_active_sandbox
 
-logger = logging.getLogger(__name__)
+# Initialize structured logging if not already done (for CLI usage)
+if not any(isinstance(h.formatter, type(None)) for h in get_logger(__name__).handlers):
+    log_level = os.getenv('LOG_LEVEL', 'INFO').upper()
+    log_format = os.getenv('LOG_FORMAT', 'dev')
+    logs_dir = Path("logs")
+    logs_dir.mkdir(exist_ok=True)
+    setup_structured_logging(
+        level=log_level,
+        format_type=log_format,
+        log_file=logs_dir / "yokeflow.log"
+    )
+
+logger = get_logger(__name__)
 
 # Re-export models for backward compatibility
 __all__ = ['AgentOrchestrator', 'SessionInfo', 'SessionStatus', 'SessionType']
@@ -94,6 +107,8 @@ class AgentOrchestrator:
         sandbox_type: str = "docker",
         initializer_model: Optional[str] = None,
         coding_model: Optional[str] = None,
+        context_files: Optional[List[Dict[str, str]]] = None,  # List of {"filename": str, "content": str}
+        context_strategy: Optional[Dict[str, Any]] = None,  # Strategy from spec generation analysis
     ) -> Dict[str, Any]:
         """
         Create a new project from a specification.
@@ -107,6 +122,8 @@ class AgentOrchestrator:
             sandbox_type: Sandbox type (docker or local), default: docker
             initializer_model: Model for initialization session (optional)
             coding_model: Model for coding sessions (optional)
+            context_files: Optional list of dicts with {"filename", "content"} for project context
+            context_strategy: Optional dict with context injection strategy ("load_all" or "task_specific")
 
         Returns:
             Dict with project info: {"project_id": UUID, "name": str, ...}
@@ -153,8 +170,31 @@ class AgentOrchestrator:
             if spec_source:
                 copy_spec_to_project(project_path, spec_source)
             elif spec_content:
-                # Write spec_content to app_spec.txt if no source file provided
-                (project_path / "app_spec.txt").write_text(spec_content)
+                # Write spec_content to app_spec.md (using new markdown format)
+                (project_path / "app_spec.md").write_text(spec_content)
+
+            # Persist context files if provided
+            if context_files:
+                context_dir = project_path / ".yokeflow" / "context"
+                context_dir.mkdir(parents=True, exist_ok=True)
+                
+                for ctx_file in context_files:
+                    try:
+                        file_path = context_dir / ctx_file["filename"]
+                        file_path.write_text(ctx_file["content"])
+                    except Exception as e:
+                        logger.warning(f"Failed to save context file {ctx_file.get('filename')}: {e}")
+                
+                logger.info(f"Saved {len(context_files)} context files to {context_dir}")
+                
+                # Create manifest with summaries
+                try:
+                    from core.context_manifest import create_context_manifest, save_manifest
+                    manifest = await create_context_manifest(context_files)
+                    save_manifest(manifest, context_dir)
+                    logger.info(f"Created context manifest for {len(context_files)} files")
+                except Exception as e:
+                    logger.warning(f"Failed to create context manifest: {e}")
 
             # Create project in database
             project = await db.create_project(
@@ -177,6 +217,11 @@ class AgentOrchestrator:
                 settings['initializer_model'] = initializer_model
             if coding_model:
                 settings['coding_model'] = coding_model
+            if context_strategy:
+                settings['context_strategy'] = context_strategy.get('strategy', 'load_all')
+                settings['context_strategy_reason'] = context_strategy.get('reason', '')
+                settings['context_strategy_metrics'] = context_strategy.get('metrics', {})
+                logger.info(f"Stored context strategy: {settings['context_strategy']}")
 
             await db.update_project_settings(project['id'], settings)
 
@@ -529,6 +574,7 @@ class AgentOrchestrator:
         coding_model: Optional[str] = None,
         max_iterations: Optional[int] = None,
         progress_callback: Optional[Callable[[Dict[str, Any]], Awaitable[None]]] = None,
+        resume_context: Optional[Dict[str, Any]] = None,
     ) -> SessionInfo:
         """
         Start an agent session for a project.
@@ -712,6 +758,9 @@ class AgentOrchestrator:
                     sandbox_type=sandbox_type,
                     event_callback=logger_event_callback
                 )
+                # Add session and project IDs for intervention system
+                session_logger.session_id = str(session_id)
+                session_logger.project_id = str(project_id)
 
                 # Register logger with session manager
                 session_manager.set_current_logger(session_logger)
@@ -738,8 +787,53 @@ class AgentOrchestrator:
                 # Get prompt based on session type and sandbox
                 if is_initializer:
                     prompt = get_initializer_prompt(sandbox_type=sandbox_type)
+                elif resume_context:
+                    # Include resume context in the prompt
+                    base_prompt = get_coding_prompt(sandbox_type=sandbox_type)
+                    resume_prompt = resume_context.get("resume_prompt", "")
+                    prompt = f"{base_prompt}\n\n{resume_prompt}"
                 else:
                     prompt = get_coding_prompt(sandbox_type=sandbox_type)
+
+                # Inject project context files (for both initializer and coding sessions)
+                # Use manifest-based approach to avoid memory issues with large files
+                context_dir = project_path / ".yokeflow" / "context"
+                if context_dir.exists():
+                    # Get context strategy from project metadata
+                    context_strategy = project_metadata.get('settings', {}).get('context_strategy', 'load_all')
+                    logger.info(f"Using context strategy: {context_strategy}")
+                    
+                    # Try to load manifest
+                    from core.context_manifest import load_manifest, manifest_to_prompt
+                    manifest = load_manifest(context_dir)
+                    
+                    if manifest:
+                        # Inject manifest (summaries only, ~3KB instead of 130KB+)
+                        manifest_prompt = manifest_to_prompt(manifest)
+                        prompt += "\n\n# Project Context Files\n"
+                        prompt += "The following context files are available. Use `cat .yokeflow/context/<filename>` to read when needed.\n\n"
+                        prompt += manifest_prompt
+                        logger.info(f"Injected manifest with {manifest['total_files']} files ({manifest['total_size_kb']}KB total) into system prompt")
+                    else:
+                        # Fallback: no manifest, load small files only
+                        small_file_parts = []
+                        for ctx_file in sorted(context_dir.glob("*")):
+                            if ctx_file.is_file() and ctx_file.name != "manifest.json":
+                                try:
+                                    content = ctx_file.read_text(encoding='utf-8')
+                                    # Only include small files (<5KB) directly
+                                    if len(content) <= 5000:
+                                        small_file_parts.append(f"## {ctx_file.name}\n```\n{content}\n```")
+                                    else:
+                                        # Just note that large files exist
+                                        small_file_parts.append(f"## {ctx_file.name}\n(Large file, {len(content)//1024}KB - use get_context_file tool to read)")
+                                except Exception as e:
+                                    logger.warning(f"Failed to read context file {ctx_file}: {e}")
+                        
+                        if small_file_parts:
+                            prompt += "\n\n# Project Context Files\n"
+                            prompt += "\n\n".join(small_file_parts)
+                            logger.info(f"Injected {len(small_file_parts)} context file references (no manifest)")
 
                 # Start heartbeat task to prevent false-positive stale detection
                 heartbeat_task = None
@@ -759,9 +853,20 @@ class AgentOrchestrator:
                 # Run session
                 try:
                     async with client:
+                        # Prepare intervention config
+                        intervention_config = {
+                            "enabled": self.config.intervention.enabled,
+                            "max_retries": self.config.intervention.max_retries,
+                            "notifications": {
+                                "enabled": bool(self.config.intervention.webhook_url),
+                                "webhook_url": self.config.intervention.webhook_url
+                            }
+                        }
+
                         status, response, session_summary = await run_agent_session(
                             client, prompt, project_path, logger=session_logger, verbose=self.verbose,
-                            session_manager=session_manager, progress_callback=progress_callback
+                            session_manager=session_manager, progress_callback=progress_callback,
+                            intervention_config=intervention_config
                         )
                 finally:
                     # Stop heartbeat task

@@ -31,7 +31,7 @@ if not is_postgresql_configured():
 
 print("Starting API server on http://localhost:8000")
 print("API documentation available at http://localhost:8000/docs")
-print("\n⚠️  Auto-reload is DISABLED")
+print("\n[!]  Auto-reload is DISABLED")
 print("   You must manually restart the server to see code changes")
 print("\nPress Ctrl+C to stop the server")
 print("="*60 + "\n")

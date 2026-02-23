@@ -34,6 +34,9 @@ function Header() {
               <a href="/containers" className="hover:text-blue-600 dark:hover:text-blue-400 transition-colors">
                 Containers
               </a>
+              <a href="/interventions" className="hover:text-blue-600 dark:hover:text-blue-400 transition-colors">
+                Interventions
+              </a>
               <a href="/prompt-improvements" className="hover:text-blue-600 dark:hover:text-blue-400 transition-colors">
                 Prompt Improvements
               </a>
